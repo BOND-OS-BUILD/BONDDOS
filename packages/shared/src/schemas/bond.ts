@@ -61,3 +61,17 @@ export const archiveConversationsSchema = z.object({
   olderThanDays: z.coerce.number().int().positive().max(3650).optional(),
 });
 export type ArchiveConversationsInput = z.infer<typeof archiveConversationsSchema>;
+
+/** Shared AI Sessions (Phase 9). Always to a specific org member — never public/cross-organization. See docs/shared-ai.md. */
+export const sharePermissionSchema = z.enum(['READ', 'COLLABORATE']);
+
+export const shareConversationSchema = z.object({
+  sharedWithUserId: z.string().min(1),
+  permission: sharePermissionSchema,
+});
+export type ShareConversationInput = z.infer<typeof shareConversationSchema>;
+
+export const transferConversationOwnershipSchema = z.object({
+  newOwnerId: z.string().min(1),
+});
+export type TransferConversationOwnershipInput = z.infer<typeof transferConversationOwnershipSchema>;

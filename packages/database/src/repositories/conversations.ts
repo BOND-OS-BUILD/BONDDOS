@@ -114,6 +114,12 @@ export async function touchConversation(id: string, organizationId: string): Pro
   await prisma.conversation.updateMany({ where: { id, organizationId }, data: { updatedAt: new Date() } });
 }
 
+/** Ownership transfer (Phase 9 Shared AI Sessions) — kept as its own function, not folded into `UpdateConversationData`, since reassigning `createdById` is a distinct, security-sensitive operation the generic update path should never accidentally trigger. */
+export async function transferConversationOwnership(id: string, organizationId: string, newOwnerId: string): Promise<boolean> {
+  const result = await prisma.conversation.updateMany({ where: { id, organizationId }, data: { createdById: newOwnerId } });
+  return result.count > 0;
+}
+
 export async function deleteConversation(id: string, organizationId: string): Promise<boolean> {
   const result = await prisma.conversation.deleteMany({ where: { id, organizationId } });
   return result.count > 0;

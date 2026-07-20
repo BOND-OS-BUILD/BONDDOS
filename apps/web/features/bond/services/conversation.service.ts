@@ -1,23 +1,31 @@
 import { requireRole } from '@bond-os/auth';
 import {
   archiveConversationsOlderThan,
+  areAllUsersInOrganization,
   createConversation as createConversationRow,
   deleteConversation as deleteConversationRow,
   getConversationById,
   getConversationShareForUser,
   listConversations,
+  listSharesForConversation,
+  removeConversationShare as removeConversationShareRow,
+  transferConversationOwnership,
   updateConversation as updateConversationRow,
+  upsertConversationShare,
   type ConversationListItem,
+  type ConversationShareData,
 } from '@bond-os/database';
 import {
   ForbiddenError,
   NotFoundError,
   ROLES,
   roleSatisfies,
+  ValidationError,
   type ConversationQuery,
   type CreateConversationInput,
   type PaginatedResult,
   type Role,
+  type ShareConversationInput,
   type UpdateConversationInput,
 } from '@bond-os/shared';
 import { getEnv } from '@bond-os/shared/server';
@@ -123,4 +131,66 @@ export async function archiveOldConversationsService(organizationId: string, old
   const days = olderThanDays ?? getEnv().MEMORY_RETENTION_DAYS;
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
   return archiveConversationsOlderThan(organizationId, cutoff);
+}
+
+/** Sharing is a `manage`-level action — only the owner or an org ADMIN+ decides who else gets access, mirroring rename/delete. See docs/shared-ai.md. */
+export async function shareConversationService(
+  organizationId: string,
+  conversationId: string,
+  input: ShareConversationInput,
+): Promise<ConversationShareData> {
+  const { session, membership } = await requireRole(organizationId, ROLES.MEMBER);
+  const conversation = await getConversationById(conversationId, organizationId);
+  if (!conversation) throw new NotFoundError('Conversation not found.');
+  await assertConversationAccess(conversation, session.user.id, membership.role, 'manage');
+
+  if (input.sharedWithUserId === conversation.createdBy?.id) {
+    throw new ValidationError('This conversation is already owned by that user.');
+  }
+  if (!(await areAllUsersInOrganization([input.sharedWithUserId], organizationId))) {
+    throw new ValidationError('You can only share with members of your organization.');
+  }
+
+  return upsertConversationShare({
+    organizationId,
+    conversationId,
+    sharedWithUserId: input.sharedWithUserId,
+    permission: input.permission,
+    sharedById: session.user.id,
+  });
+}
+
+export async function listConversationSharesService(organizationId: string, conversationId: string): Promise<ConversationShareData[]> {
+  const { session, membership } = await requireRole(organizationId, ROLES.MEMBER);
+  const conversation = await getConversationById(conversationId, organizationId);
+  if (!conversation) throw new NotFoundError('Conversation not found.');
+  await assertConversationAccess(conversation, session.user.id, membership.role, 'manage');
+
+  return listSharesForConversation(conversationId, organizationId);
+}
+
+export async function removeConversationShareService(organizationId: string, conversationId: string, sharedWithUserId: string): Promise<void> {
+  const { session, membership } = await requireRole(organizationId, ROLES.MEMBER);
+  const conversation = await getConversationById(conversationId, organizationId);
+  if (!conversation) throw new NotFoundError('Conversation not found.');
+  await assertConversationAccess(conversation, session.user.id, membership.role, 'manage');
+
+  const removed = await removeConversationShareRow(conversationId, organizationId, sharedWithUserId);
+  if (!removed) throw new NotFoundError('This conversation is not shared with that user.');
+}
+
+/** Reassigns `Conversation.createdById` — the one way a non-owner can gain `manage` access, since no share ever grants it. */
+export async function transferConversationOwnershipService(organizationId: string, conversationId: string, newOwnerId: string): Promise<ConversationListItem> {
+  const { session, membership } = await requireRole(organizationId, ROLES.MEMBER);
+  const conversation = await getConversationById(conversationId, organizationId);
+  if (!conversation) throw new NotFoundError('Conversation not found.');
+  await assertConversationAccess(conversation, session.user.id, membership.role, 'manage');
+
+  if (!(await areAllUsersInOrganization([newOwnerId], organizationId))) {
+    throw new ValidationError('The new owner must be a member of your organization.');
+  }
+
+  const transferred = await transferConversationOwnership(conversationId, organizationId, newOwnerId);
+  if (!transferred) throw new NotFoundError('Conversation not found.');
+  return getConversationService(organizationId, conversationId);
 }

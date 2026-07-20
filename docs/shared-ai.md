@@ -2,12 +2,10 @@
 
 ## Scope
 
-`apps/web/features/bond/services/conversation.service.ts`'s `assertConversationAccess`, plus the
-`ConversationShare` model (`packages/database/src/repositories/conversation-shares.ts`). This doc covers
-the access model this phase introduces. Share-creation UI, an explicit `POST /api/collaboration`-family
-share-management route, and ownership transfer land alongside the rest of Phase 9's UI surface; this doc
-will grow to cover them then. What's below — the access GATE itself — is built and enforced today on
-every existing conversation read/write path.
+`apps/web/features/bond/services/conversation.service.ts` — the `assertConversationAccess` gate, plus
+the sharing and ownership-transfer surface built on top of it, and the `ConversationShare` model
+(`packages/database/src/repositories/conversation-shares.ts`). This doc covers the access model this
+phase introduces, how sharing and ownership transfer work, and where each is enforced.
 
 ## The gap this closes
 
@@ -31,10 +29,10 @@ export type ConversationAccessLevel = 'read' | 'collaborate' | 'manage';
   COLLABORATE).
 - **`collaborate`** — post new messages into the conversation via `/api/bond/chat`. Granted to: the
   owner, ADMIN+, or specifically a COLLABORATE-permission share — a READ share cannot post.
-- **`manage`** — rename, pin, archive, or delete the conversation. Granted to: the owner or ADMIN+
-  *only*. No share, regardless of permission, grants this — sharing is about content access, not
-  conversation lifecycle. (Ownership transfer, when it lands, will be the one way a non-owner gains
-  `manage`.)
+- **`manage`** — rename, pin, archive, delete, share, or transfer ownership of the conversation. Granted
+  to: the owner or ADMIN+ *only*. No share, regardless of permission, grants this — sharing is about
+  content access, not conversation lifecycle. Ownership transfer (below) is the one way a non-owner
+  gains `manage`.
 
 ```ts
 export async function assertConversationAccess(
@@ -67,6 +65,8 @@ never-had-privacy row into a 403 for everyone.
 | `deleteConversationService` | `manage` | `conversation.service.ts` |
 | `listMessagesService` | `read` | `message.service.ts` |
 | `runBondChatPipeline` (posting into an *existing* conversation) | `collaborate` | `rag-pipeline.service.ts` |
+| `shareConversationService` / `listConversationSharesService` / `removeConversationShareService` | `manage` | `conversation.service.ts` |
+| `transferConversationOwnershipService` | `manage` | `conversation.service.ts` |
 
 Every one of these already called `requireRole(organizationId, ROLES.MEMBER)` before this phase — the
 access check is layered on top of that using the `{ session, membership }` it already returns, so no
@@ -91,13 +91,28 @@ model ConversationShare {
 Always to a specific org member — there is no public-link or cross-organization sharing mode, matching
 this phase's explicit Do-NOT-Build boundary. `upsertConversationShare` re-shares idempotently: sharing
 with the same person twice updates their permission rather than erroring or duplicating a row.
+`shareConversationService` additionally rejects sharing with the conversation's own owner (a no-op that
+would just be confusing) and validates `sharedWithUserId` is actually a member of the caller's
+organization via the same `areAllUsersInOrganization` helper Task/Project/Meeting assignee validation
+already uses.
+
+`GET/POST /api/bond/conversations/[id]/shares` and `DELETE .../shares/[userId]` are all `manage`-gated —
+only the owner or an ADMIN+ can see or change who a conversation is shared with; a COLLABORATE share
+does not let its holder re-share the conversation with someone else.
+
+## Ownership transfer
+
+`POST /api/bond/conversations/[id]/transfer` reassigns `Conversation.createdById` via a dedicated
+repository function, `transferConversationOwnership` — kept separate from the generic
+`updateConversation` field-update path on purpose, since reassigning ownership is a distinct,
+security-sensitive operation the generic update should never be able to accidentally trigger. Only the
+current owner or an ADMIN+ can transfer ownership, and the new owner must already be a member of the
+organization (validated the same way sharing validates its target).
 
 ## What this does NOT do
 
 - **No public or cross-organization sharing.** Every share targets one specific member of the same
   organization the conversation belongs to.
-- **No ownership transfer yet.** The `manage` level exists and is enforced; the service method that
-  reassigns `Conversation.createdById` lands with the rest of Phase 9's Shared AI Sessions surface.
 - **No citation changes.** Citations are already per-`Message` and untouched by any of this — a shared
   conversation renders identically to its owner's own view; integrity is preserved by construction, not
   new code.
