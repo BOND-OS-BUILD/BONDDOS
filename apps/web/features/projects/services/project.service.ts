@@ -75,13 +75,13 @@ export async function updateProjectService(
   id: string,
   input: UpdateProjectInput,
 ): Promise<ProjectDetail> {
-  await requireRole(organizationId, ROLES.MEMBER);
+  const { session } = await requireRole(organizationId, ROLES.MEMBER);
   await assertAssigneesInOrg(organizationId, [
     ...(input.ownerId ? [input.ownerId] : []),
     ...(input.memberIds ?? []),
   ]);
 
-  const updated = await updateProjectRow(id, organizationId, input);
+  const updated = await updateProjectRow(id, organizationId, { ...input, editedById: session.user.id });
   if (!updated) throw new NotFoundError('Project not found.');
 
   const publishEvent = await getPublishEvent();

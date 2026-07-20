@@ -1,4 +1,4 @@
-import type { PaginatedResult } from '@bond-os/shared';
+import { ConflictError, type PaginatedResult } from '@bond-os/shared';
 
 import { prisma } from '../client';
 import type { Prisma } from '../generated/index.js';
@@ -147,6 +147,10 @@ export interface UpdateMeetingData {
   duration?: number | null;
   projectId?: string;
   attendeeIds?: string[];
+  /** Optimistic-locking guard (Phase 9 Shared Editing) — omitted by every pre-Phase-9 caller, preserving last-write-wins for them; only adds a `version` predicate to the update when provided. Throws `ConflictError` on a stale/lost race. */
+  expectedVersion?: number;
+  /** Attributed on the `EntityVersionSnapshot` row written before every update, regardless of whether `expectedVersion` was passed. */
+  editedById?: string | null;
 }
 
 /**
@@ -155,17 +159,44 @@ export interface UpdateMeetingData {
  * filter). Attendee replacement only runs if the scoped update actually
  * matched a row, so a cross-tenant `id` can't sneak an attendee-list
  * mutation through even though the field update itself was a no-op.
+ *
+ * Phase 9 additive: every update snapshots the pre-overwrite row into
+ * `EntityVersionSnapshot` and increments `version` — see docs/collaboration.md.
  */
 export async function updateMeeting(
   id: string,
   organizationId: string,
   data: UpdateMeetingData,
 ): Promise<MeetingDetail | null> {
-  const { attendeeIds, ...rest } = data;
+  const { attendeeIds, expectedVersion, editedById, ...rest } = data;
 
   const updated = await prisma.$transaction(async (tx) => {
-    const result = await tx.meeting.updateMany({ where: { id, organizationId }, data: rest });
-    if (result.count === 0) return false;
+    const current = await tx.meeting.findFirst({ where: { id, organizationId } });
+    if (!current) return false;
+
+    if (expectedVersion !== undefined && current.version !== expectedVersion) {
+      throw new ConflictError('This meeting was edited by someone else. Refresh and try again.');
+    }
+
+    await tx.entityVersionSnapshot.create({
+      data: {
+        organizationId,
+        entityType: 'MEETING',
+        entityId: id,
+        version: current.version,
+        snapshot: current as unknown as Prisma.InputJsonValue,
+        editedById: editedById ?? null,
+      },
+    });
+
+    const versionGuard = expectedVersion !== undefined ? { version: current.version } : {};
+    const result = await tx.meeting.updateMany({
+      where: { id, organizationId, ...versionGuard },
+      data: { ...rest, version: { increment: 1 } },
+    });
+    if (result.count === 0) {
+      throw new ConflictError('This meeting was edited by someone else. Refresh and try again.');
+    }
 
     if (attendeeIds) {
       await tx.meetingAttendee.deleteMany({ where: { meetingId: id } });

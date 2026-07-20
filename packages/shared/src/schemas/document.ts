@@ -24,6 +24,8 @@ export const updateDocumentSchema = z.object({
   projectId: z.string().min(1).nullable().optional(),
   meetingId: z.string().min(1).nullable().optional(),
   taskIds: z.array(z.string().min(1)).optional(),
+  /** Optimistic-locking guard (Phase 9 Shared Editing) — omit to keep last-write-wins behavior; pass the version the client last read to get a 409 on a concurrent edit instead. */
+  expectedVersion: z.number().int().min(1).optional(),
 });
 export type UpdateDocumentInput = z.infer<typeof updateDocumentSchema>;
 

@@ -20,7 +20,10 @@ export const createProjectSchema = z.object({
 });
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 
-export const updateProjectSchema = createProjectSchema.partial();
+/** Optimistic-locking guard (Phase 9 Shared Editing) — omit to keep last-write-wins behavior; pass the version the client last read to get a 409 on a concurrent edit instead. */
+export const updateProjectSchema = createProjectSchema.partial().extend({
+  expectedVersion: z.number().int().min(1).optional(),
+});
 export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
 
 export const projectQuerySchema = paginationQuerySchema.extend({

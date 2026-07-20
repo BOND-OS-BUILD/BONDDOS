@@ -81,13 +81,13 @@ export async function updateMeetingService(
   id: string,
   input: UpdateMeetingInput,
 ): Promise<MeetingDetail> {
-  await requireRole(organizationId, ROLES.MEMBER);
+  const { session } = await requireRole(organizationId, ROLES.MEMBER);
   if (input.projectId) {
     await assertProjectInOrg(organizationId, input.projectId);
   }
   await assertAttendeesInOrg(organizationId, input.attendeeIds ?? []);
 
-  const updated = await updateMeetingRow(id, organizationId, input);
+  const updated = await updateMeetingRow(id, organizationId, { ...input, editedById: session.user.id });
   if (!updated) throw new NotFoundError('Meeting not found.');
 
   const publishEvent = await getPublishEvent();

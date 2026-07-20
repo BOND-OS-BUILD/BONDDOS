@@ -1,4 +1,4 @@
-import type { PaginatedResult } from '@bond-os/shared';
+import { ConflictError, type PaginatedResult } from '@bond-os/shared';
 
 import { prisma } from '../client';
 import type { Priority, Prisma, ProjectStatus } from '../generated/index.js';
@@ -181,6 +181,10 @@ export interface UpdateProjectData {
   dueDate?: Date | null;
   ownerId?: string | null;
   memberIds?: string[];
+  /** Optimistic-locking guard (Phase 9 Shared Editing) — omitted by every pre-Phase-9 caller (including the Tool Execution Framework's direct `updateProject` calls), preserving last-write-wins for them; only adds a `version` predicate to the update when provided. Throws `ConflictError` on a stale/lost race. */
+  expectedVersion?: number;
+  /** Attributed on the `EntityVersionSnapshot` row written before every update, regardless of whether `expectedVersion` was passed. */
+  editedById?: string | null;
 }
 
 /**
@@ -189,17 +193,44 @@ export interface UpdateProjectData {
  * filter). Member replacement only runs if the scoped update actually
  * matched a row, so a cross-tenant `id` can't sneak a member-list mutation
  * through even though the field update itself was a no-op.
+ *
+ * Phase 9 additive: every update snapshots the pre-overwrite row into
+ * `EntityVersionSnapshot` and increments `version` — see docs/collaboration.md.
  */
 export async function updateProject(
   id: string,
   organizationId: string,
   data: UpdateProjectData,
 ): Promise<ProjectDetail | null> {
-  const { memberIds, ...rest } = data;
+  const { memberIds, expectedVersion, editedById, ...rest } = data;
 
   const updated = await prisma.$transaction(async (tx) => {
-    const result = await tx.project.updateMany({ where: { id, organizationId }, data: rest });
-    if (result.count === 0) return false;
+    const current = await tx.project.findFirst({ where: { id, organizationId } });
+    if (!current) return false;
+
+    if (expectedVersion !== undefined && current.version !== expectedVersion) {
+      throw new ConflictError('This project was edited by someone else. Refresh and try again.');
+    }
+
+    await tx.entityVersionSnapshot.create({
+      data: {
+        organizationId,
+        entityType: 'PROJECT',
+        entityId: id,
+        version: current.version,
+        snapshot: current as unknown as Prisma.InputJsonValue,
+        editedById: editedById ?? null,
+      },
+    });
+
+    const versionGuard = expectedVersion !== undefined ? { version: current.version } : {};
+    const result = await tx.project.updateMany({
+      where: { id, organizationId, ...versionGuard },
+      data: { ...rest, version: { increment: 1 } },
+    });
+    if (result.count === 0) {
+      throw new ConflictError('This project was edited by someone else. Refresh and try again.');
+    }
 
     if (memberIds) {
       await tx.projectMember.deleteMany({ where: { projectId: id } });

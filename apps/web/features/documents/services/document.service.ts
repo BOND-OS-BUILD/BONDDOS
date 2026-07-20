@@ -102,11 +102,11 @@ export async function updateDocumentService(
   id: string,
   input: UpdateDocumentInput,
 ): Promise<DocumentDetail> {
-  await requireRole(organizationId, ROLES.MEMBER);
+  const { session } = await requireRole(organizationId, ROLES.MEMBER);
   if (input.projectId) await assertProjectInOrg(organizationId, input.projectId);
   if (input.meetingId) await assertMeetingInOrg(organizationId, input.meetingId);
 
-  const updated = await updateDocumentRow(id, organizationId, input);
+  const updated = await updateDocumentRow(id, organizationId, { ...input, editedById: session.user.id });
   if (!updated) throw new NotFoundError('Document not found.');
   return updated;
 }

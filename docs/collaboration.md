@@ -85,10 +85,62 @@ prerequisite for real multi-user production deployment, the same way `docs/sched
 
 - **No WebSockets, no persistent bidirectional connection.** Every "live" surface in Phase 9 is this one
   poll-and-reconnect primitive, not a push-based transport.
-- **No CRDT, no operational transform.** Shared Editing (docs/collaboration.md's sibling coverage in the
-  Comments/Spaces docs) uses optimistic-locking version conflicts, not live character-level merging.
+- **No CRDT, no operational transform.** Shared Editing (below) uses optimistic-locking version
+  conflicts, not live character-level merging.
 - **No guaranteed sub-3-second latency.** The poll interval and snapshot TTL trade a small amount of
   staleness for avoiding a query storm; this is "continuously live," not "instant."
 - **No cross-organization or unauthenticated channels.** Every channel key is built server-side from an
   authenticated session's own organization (and, where relevant, user id) — there is no channel type
   that accepts a caller-supplied organization or user id.
+
+## Shared Editing: optimistic locking, not CRDT
+
+Document, Project, and Meeting all carry an additive `version: Int @default(1)` column. Every update to
+one of them — whether or not the caller opts into conflict-checking — does two things inside the same
+transaction as the write itself:
+
+1. Snapshots the row's state **before** the overwrite into `EntityVersionSnapshot` (one polymorphic
+   table covering all versioned models, mirroring `Event`/`AuditEvent`'s own "one table, not N
+   duplicated ones" precedent — see `packages/database/src/repositories/entity-version-snapshots.ts`).
+2. Increments `version` by 1.
+
+```ts
+export async function updateDocument(id: string, organizationId: string, data: UpdateDocumentData): Promise<DocumentDetail | null> {
+  const { expectedVersion, editedById, ...rest } = data;
+  return prisma.$transaction(async (tx) => {
+    const current = await tx.document.findFirst({ where: { id, organizationId } });
+    if (!current) return null;
+    if (expectedVersion !== undefined && current.version !== expectedVersion) {
+      throw new ConflictError(/* ... */);
+    }
+    await tx.entityVersionSnapshot.create({ data: { /* pre-overwrite snapshot of `current` */ } });
+    const versionGuard = expectedVersion !== undefined ? { version: current.version } : {};
+    const result = await tx.document.updateMany({ where: { id, organizationId, ...versionGuard }, data: { ...rest, version: { increment: 1 } } });
+    if (result.count === 0) throw new ConflictError(/* a concurrent editor won the race */);
+    // ...
+  });
+}
+```
+
+`expectedVersion` is an **additive, optional** field on `UpdateDocumentData`/`UpdateMeetingData`/
+`UpdateProjectData` and their Zod input schemas. When a caller omits it — every pre-Phase-9 caller,
+including the Tool Execution Framework's direct `updateProject`/`archive-project` calls — the `version`
+predicate is never added to the update's `WHERE` clause, so the update behaves exactly as it always did:
+last-write-wins, no `ConflictError` ever thrown. Only a caller that explicitly reads a row's current
+`version` and passes it back as `expectedVersion` opts into the conflict check. This is what keeps the
+change additive rather than a breaking behavior change for existing call sites.
+
+A caller that gets `ConflictError` (409) is expected to re-fetch the row (getting the new `version`) and
+show the user both their pending change and the current state — there is no automatic merge. This is a
+deliberate scope boundary from the spec ("No CRDT implementation required in this phase"): a version
+mismatch is surfaced, not resolved.
+
+**Entity ("Notes") is schema-ready but not wired to an edit path.** `Entity.version` and
+`EntityVersionSnapshot` support `entityType = 'GRAPH_NODE'`/`NOTE'` rows the same way they support
+Document/Project/Meeting, but this codebase has no `updateEntity`-style repository function or PATCH
+route for Entity at all as of Phase 9 — Entity rows are created (`createSimpleEntity`,
+`createPersonEntity`) and have their metadata merged (`mergeEntityMetadata`), but there was never a
+general "edit an entity's title/description" surface for Shared Editing to extend. Building one from
+scratch is a new CRUD feature, not "add collaboration to an existing editor," so it's deliberately left
+for whenever Entity editing itself becomes a real feature — at that point it can reuse this exact
+mechanism with no schema changes.

@@ -1,4 +1,4 @@
-import type { PaginatedResult } from '@bond-os/shared';
+import { ConflictError, type PaginatedResult } from '@bond-os/shared';
 
 import { prisma } from '../client';
 import type { DocumentType, Prisma } from '../generated/index.js';
@@ -152,6 +152,17 @@ export interface UpdateDocumentData {
   projectId?: string | null;
   meetingId?: string | null;
   taskIds?: string[];
+  /**
+   * Optimistic-locking guard (Phase 9 Shared Editing). Omitted by every
+   * pre-Phase-9 caller (including the Tool Execution Framework's
+   * `update-project.tool.ts`-style direct repo calls elsewhere), which
+   * keeps last-write-wins behavior exactly unchanged for them — the
+   * `version` predicate below is only added to the update's `WHERE` when
+   * this is provided. When provided and stale, throws `ConflictError`.
+   */
+  expectedVersion?: number;
+  /** Attributed on the `EntityVersionSnapshot` row written before every update, regardless of whether `expectedVersion` was passed. */
+  editedById?: string | null;
 }
 
 /**
@@ -160,17 +171,46 @@ export interface UpdateDocumentData {
  * filter). Task-link replacement only runs if the scoped update actually
  * matched a row, so a cross-tenant `id` can't sneak a link mutation through
  * even though the field update itself was a no-op.
+ *
+ * Phase 9 additive: every update snapshots the pre-overwrite row into
+ * `EntityVersionSnapshot` and increments `version`, regardless of whether
+ * the caller opted into conflict-checking — see docs/collaboration.md.
  */
 export async function updateDocument(
   id: string,
   organizationId: string,
   data: UpdateDocumentData,
 ): Promise<DocumentDetail | null> {
-  const { taskIds, ...rest } = data;
+  const { taskIds, expectedVersion, editedById, ...rest } = data;
 
   const updated = await prisma.$transaction(async (tx) => {
-    const result = await tx.document.updateMany({ where: { id, organizationId }, data: rest });
-    if (result.count === 0) return false;
+    const current = await tx.document.findFirst({ where: { id, organizationId } });
+    if (!current) return false;
+
+    if (expectedVersion !== undefined && current.version !== expectedVersion) {
+      throw new ConflictError('This document was edited by someone else. Refresh and try again.');
+    }
+
+    await tx.entityVersionSnapshot.create({
+      data: {
+        organizationId,
+        entityType: 'DOCUMENT',
+        entityId: id,
+        version: current.version,
+        snapshot: current as unknown as Prisma.InputJsonValue,
+        editedById: editedById ?? null,
+      },
+    });
+
+    const versionGuard = expectedVersion !== undefined ? { version: current.version } : {};
+    const result = await tx.document.updateMany({
+      where: { id, organizationId, ...versionGuard },
+      data: { ...rest, version: { increment: 1 } },
+    });
+    if (result.count === 0) {
+      // Only reachable when expectedVersion was passed — a concurrent editor won the race between our read above and this write.
+      throw new ConflictError('This document was edited by someone else. Refresh and try again.');
+    }
 
     if (taskIds) {
       await tx.taskDocument.deleteMany({ where: { documentId: id } });
