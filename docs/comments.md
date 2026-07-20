@@ -46,11 +46,15 @@ before anything is persisted:
 A comment carrying an unresolvable or out-of-organization mention target is rejected outright
 (`ValidationError`), not silently dropped — the author finds out immediately, not after the fact.
 
-**`@agent` mentions are notification-only.** They record that an agent was tagged (a `Mention` row,
-visible in-thread, and it becomes an `AGENT_INSIGHT`-adjacent... actually a `MENTION`-type `Notification`
-for the agent's owning team to see) and never invoke that agent to think, respond, or act. Nothing in the
-spec asks for live agent auto-response to a mention, and Phase 7's "no unapproved autonomous execution"
-default holds here.
+**`@agent` mentions are notification-only** in the sense that matters most: they never invoke that agent
+to think, respond, or act. Nothing in the spec asks for live agent auto-response to a mention, and Phase
+7's "no unapproved autonomous execution" default holds here. Concretely, an `@agent` mention is recorded
+as a `Mention` row (visible in-thread, same as any other mention) but does **not** currently fan out a
+`Notification` — unlike `@user` mentions, `notifyFromEvent`'s `comment.created` case only reads
+`mentionedUserIds` from the event payload. Agents aren't `User` rows and have no inbox of their own to
+notify, and routing to "whoever manages this agent" has no single unambiguous recipient today (an agent
+can be linked into zero, one, or several Spaces via `SpaceAgent`) — so this is left as recorded-but-silent
+rather than guessing a recipient.
 
 ## Fan-out: `comment.created` → `notifyFromEvent`
 
@@ -85,3 +89,12 @@ the other five.
   overwrites `content`; there's no "show me the previous wording."
 - **No cross-organization comments.** `Comment.organizationId` is always the caller's own organization,
   the same way every other org-scoped write in this codebase works.
+- **No per-attachment removal.** `deleteCommentAttachment` exists in the repository layer but isn't
+  wired to any service or route — an attachment can only be removed by deleting the whole comment it's
+  on (which cascades). A found-not-fixed gap from the Phase 9 security review, tracked here rather than
+  silently left unexplained.
+- **No storage cleanup on delete**, matching a pre-existing gap this codebase already has for Documents
+  (`deleteDocumentService` doesn't call `deletePublicFile` either) — deleting a comment removes its
+  `CommentAttachment` rows via cascade, but the underlying file stays in the Supabase bucket. Not a
+  Phase-9-introduced regression; consistent with existing behavior, not fixed here to avoid diverging
+  from it in one place while leaving it everywhere else.

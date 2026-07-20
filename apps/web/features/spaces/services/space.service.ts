@@ -123,7 +123,8 @@ export async function removeSpaceMemberService(organizationId: string, callerId:
   if (!removed) throw new NotFoundError('That user is not a member of this space.');
 }
 
-async function assertSpaceMembership(organizationId: string, callerId: string, callerRole: Role, spaceId: string): Promise<SpaceDetail> {
+/** Despite the name, this checks MANAGE permission (creator or ADMIN+), not mere membership — content link/unlink is a management action, matching rename/delete, not something any space member can do. */
+async function assertCanManageSpaceById(organizationId: string, callerId: string, callerRole: Role, spaceId: string): Promise<SpaceDetail> {
   const space = await getSpaceById(spaceId, organizationId);
   if (!space) throw new NotFoundError('Space not found.');
   await assertCanManageSpace(callerId, callerRole, space);
@@ -132,46 +133,46 @@ async function assertSpaceMembership(organizationId: string, callerId: string, c
 
 export async function linkProjectToSpaceService(organizationId: string, callerId: string, spaceId: string, projectId: string): Promise<void> {
   const { membership } = await requireRole(organizationId, ROLES.MEMBER);
-  await assertSpaceMembership(organizationId, callerId, membership.role, spaceId);
+  await assertCanManageSpaceById(organizationId, callerId, membership.role, spaceId);
   if (!(await getProjectById(projectId, organizationId))) throw new ValidationError('Project not found in your organization.');
   await addProjectToSpace(spaceId, projectId);
 }
 
 export async function unlinkProjectFromSpaceService(organizationId: string, callerId: string, spaceId: string, projectId: string): Promise<void> {
   const { membership } = await requireRole(organizationId, ROLES.MEMBER);
-  await assertSpaceMembership(organizationId, callerId, membership.role, spaceId);
+  await assertCanManageSpaceById(organizationId, callerId, membership.role, spaceId);
   await removeProjectFromSpace(spaceId, projectId);
 }
 
 export async function linkKnowledgeDocumentToSpaceService(organizationId: string, callerId: string, spaceId: string, knowledgeDocumentId: string): Promise<void> {
   const { membership } = await requireRole(organizationId, ROLES.MEMBER);
-  await assertSpaceMembership(organizationId, callerId, membership.role, spaceId);
+  await assertCanManageSpaceById(organizationId, callerId, membership.role, spaceId);
   if (!(await getKnowledgeDocumentById(knowledgeDocumentId, organizationId))) throw new ValidationError('Knowledge document not found in your organization.');
   await addKnowledgeDocumentToSpace(spaceId, knowledgeDocumentId);
 }
 
 export async function unlinkKnowledgeDocumentFromSpaceService(organizationId: string, callerId: string, spaceId: string, knowledgeDocumentId: string): Promise<void> {
   const { membership } = await requireRole(organizationId, ROLES.MEMBER);
-  await assertSpaceMembership(organizationId, callerId, membership.role, spaceId);
+  await assertCanManageSpaceById(organizationId, callerId, membership.role, spaceId);
   await removeKnowledgeDocumentFromSpace(spaceId, knowledgeDocumentId);
 }
 
 export async function linkWorkflowToSpaceService(organizationId: string, callerId: string, spaceId: string, workflowDefinitionId: string): Promise<void> {
   const { membership } = await requireRole(organizationId, ROLES.MEMBER);
-  await assertSpaceMembership(organizationId, callerId, membership.role, spaceId);
+  await assertCanManageSpaceById(organizationId, callerId, membership.role, spaceId);
   if (!(await getWorkflowDefinitionById(workflowDefinitionId, organizationId))) throw new ValidationError('Workflow not found in your organization.');
   await addWorkflowToSpace(spaceId, workflowDefinitionId);
 }
 
 export async function unlinkWorkflowFromSpaceService(organizationId: string, callerId: string, spaceId: string, workflowDefinitionId: string): Promise<void> {
   const { membership } = await requireRole(organizationId, ROLES.MEMBER);
-  await assertSpaceMembership(organizationId, callerId, membership.role, spaceId);
+  await assertCanManageSpaceById(organizationId, callerId, membership.role, spaceId);
   await removeWorkflowFromSpace(spaceId, workflowDefinitionId);
 }
 
 export async function linkAgentToSpaceService(organizationId: string, callerId: string, spaceId: string, agentKey: string): Promise<void> {
   const { membership } = await requireRole(organizationId, ROLES.MEMBER);
-  await assertSpaceMembership(organizationId, callerId, membership.role, spaceId);
+  await assertCanManageSpaceById(organizationId, callerId, membership.role, spaceId);
   const registry = await getAgentRegistryService();
   if (!registry.get(agentKey)) throw new ValidationError(`Unknown agent: ${agentKey}`);
   await addAgentToSpace(spaceId, agentKey);
@@ -179,6 +180,6 @@ export async function linkAgentToSpaceService(organizationId: string, callerId: 
 
 export async function unlinkAgentFromSpaceService(organizationId: string, callerId: string, spaceId: string, agentKey: string): Promise<void> {
   const { membership } = await requireRole(organizationId, ROLES.MEMBER);
-  await assertSpaceMembership(organizationId, callerId, membership.role, spaceId);
+  await assertCanManageSpaceById(organizationId, callerId, membership.role, spaceId);
   await removeAgentFromSpace(spaceId, agentKey);
 }

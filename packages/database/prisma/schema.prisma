@@ -2100,8 +2100,10 @@ model CommentAttachment {
 /// later from unstructured text, the same discipline Phase 7 applied to
 /// agent-to-agent messages. `@team` resolves against `Space` membership
 /// (Spaces ARE this codebase's "team" concept for mentions — see model
-/// `Space`). `@agent` mentions are NOTIFICATION-ONLY; nothing here ever
-/// invokes an agent. See docs/comments.md.
+/// `Space`). `@agent` mentions are recorded but never invoke that agent —
+/// they also don't currently fan out a Notification (agents have no inbox
+/// and no single unambiguous recipient), unlike `@user` mentions. See
+/// docs/comments.md.
 model Mention {
   id                String      @id @default(cuid())
   organizationId    String
