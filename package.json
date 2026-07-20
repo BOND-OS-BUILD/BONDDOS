@@ -1,0 +1,31 @@
+{
+  "name": "bond-os",
+  "private": true,
+  "version": "0.1.0",
+  "description": "BOND OS — AI-native operating system for startups. Phase 0: core platform foundation.",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,mdx,css}\" --ignore-path .gitignore",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,mdx,css}\" --ignore-path .gitignore",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "db:generate": "pnpm --filter @bond-os/database run generate",
+    "db:migrate": "pnpm --filter @bond-os/database run migrate:dev",
+    "db:migrate:deploy": "pnpm --filter @bond-os/database run migrate:deploy",
+    "db:seed": "pnpm --filter @bond-os/database run seed",
+    "db:studio": "pnpm --filter @bond-os/database run studio"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^7.4.4",
+    "prettier": "^3.4.2",
+    "prettier-plugin-tailwindcss": "^0.6.9",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}

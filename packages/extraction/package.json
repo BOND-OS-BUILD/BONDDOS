@@ -1,0 +1,21 @@
+{
+  "name": "@bond-os/extraction",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Rule-based (regex/heuristic, no AI) entity-candidate extraction from plain text for BOND OS's knowledge graph.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@bond-os/config": "workspace:*",
+    "@types/node": "^22.10.5",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.2"
+  }
+}

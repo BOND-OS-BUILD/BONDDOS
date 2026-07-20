@@ -1,0 +1,9 @@
+{
+  "extends": "@bond-os/config/tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "."
+  },
+  "include": ["src", "prisma"],
+  "exclude": ["node_modules", "dist", "src/generated"]
+}

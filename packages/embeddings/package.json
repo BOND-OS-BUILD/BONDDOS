@@ -1,0 +1,21 @@
+{
+  "name": "@bond-os/embeddings",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pluggable embedding provider architecture (OpenAI/Gemini/Voyage/Ollama/local) for BOND OS's AI retrieval layer.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@bond-os/config": "workspace:*",
+    "@types/node": "^22.10.5",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.2"
+  }
+}

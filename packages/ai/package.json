@@ -1,0 +1,23 @@
+{
+  "name": "@bond-os/ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI provider abstraction (OpenAI/Anthropic/Gemini/Ollama) for BOND OS. Infrastructure only — nothing in this codebase calls generate()/stream() yet.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "gpt-tokenizer": "^2.6.2"
+  },
+  "devDependencies": {
+    "@bond-os/config": "workspace:*",
+    "@types/node": "^22.10.5",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.2"
+  }
+}

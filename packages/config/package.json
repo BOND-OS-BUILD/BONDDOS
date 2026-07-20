@@ -1,0 +1,22 @@
+{
+  "name": "@bond-os/config",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared TypeScript, ESLint, and Tailwind presets for BOND OS packages/apps.",
+  "exports": {
+    "./tsconfig.base.json": "./tsconfig.base.json",
+    "./tsconfig.nextjs.json": "./tsconfig.nextjs.json",
+    "./tsconfig.react-library.json": "./tsconfig.react-library.json",
+    "./eslint/base": "./eslint/base.mjs",
+    "./tailwind-preset": "./tailwind-preset.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "@eslint/js": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "tailwindcss-animate": "^1.0.7",
+    "typescript-eslint": "^8.19.0"
+  }
+}

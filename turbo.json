@@ -1,0 +1,48 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "tui",
+  "globalEnv": [
+    "NODE_ENV",
+    "DATABASE_URL",
+    "BETTER_AUTH_SECRET",
+    "NEXTAUTH_SECRET",
+    "APP_URL",
+    "NEXT_PUBLIC_APP_URL",
+    "SUPABASE_URL",
+    "SUPABASE_KEY",
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "REDIS_URL",
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_USER",
+    "SMTP_PASS",
+    "EMAIL_FROM"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build", "^generate"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^generate"]
+    },
+    "lint": {
+      "dependsOn": ["^generate"],
+      "outputs": []
+    },
+    "typecheck": {
+      "dependsOn": ["^generate"],
+      "outputs": []
+    },
+    "generate": {
+      "cache": true,
+      "outputs": ["src/generated/**", "node_modules/.prisma/**"]
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}

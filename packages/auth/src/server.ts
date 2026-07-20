@@ -1,0 +1,60 @@
+import 'server-only';
+
+import { prisma } from '@bond-os/database';
+import { getEnv, logger } from '@bond-os/shared/server';
+import { betterAuth } from 'better-auth';
+import { prismaAdapter } from 'better-auth/adapters/prisma';
+
+import { getEmailProvider, renderResetPasswordEmail } from './email';
+
+const env = getEnv();
+const log = logger.child('auth');
+
+const ONE_WEEK_SECONDS = 60 * 60 * 24 * 7;
+const ONE_DAY_SECONDS = 60 * 60 * 24;
+
+/**
+ * The single Better Auth server instance for BOND OS. Mounted by
+ * `apps/web/app/api/auth/[...all]/route.ts`; consumed server-side via
+ * `getServerSession`/`requireAuth` in `./session.ts`, and client-side via
+ * `createAuthClient` in `./client.ts`.
+ */
+export const auth = betterAuth({
+  database: prismaAdapter(prisma, {
+    provider: 'postgresql',
+  }),
+  secret: env.BETTER_AUTH_SECRET,
+  baseURL: env.APP_URL,
+  trustedOrigins: [env.APP_URL],
+  emailAndPassword: {
+    enabled: true,
+    requireEmailVerification: false,
+    minPasswordLength: 8,
+    maxPasswordLength: 128,
+    resetPasswordTokenExpiresIn: 60 * 60, // 1 hour
+    sendResetPassword: async ({ user, url }) => {
+      const { html, text } = renderResetPasswordEmail(url);
+      await getEmailProvider().send({
+        to: user.email,
+        subject: 'Reset your BOND OS password',
+        html,
+        text,
+      });
+      log.info('Password reset email queued', { userId: user.id });
+    },
+  },
+  session: {
+    expiresIn: ONE_WEEK_SECONDS,
+    updateAge: ONE_DAY_SECONDS,
+    cookieCache: {
+      enabled: true,
+      maxAge: 60 * 5,
+    },
+  },
+  advanced: {
+    useSecureCookies: env.NODE_ENV === 'production',
+    cookiePrefix: 'bondos',
+  },
+});
+
+export type Auth = typeof auth;

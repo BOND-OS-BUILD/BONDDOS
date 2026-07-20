@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bondos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bondos
+      POSTGRES_PASSWORD: bondos
+      POSTGRES_DB: bondos
+    ports:
+      - "5432:5432"
+    volumes:
+      - bondos-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bondos -d bondos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: bondos-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - bondos-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bondos-web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://bondos:bondos@postgres:5432/bondos?schema=public
+      REDIS_URL: redis://redis:6379
+    profiles:
+      - full
+
+volumes:
+  bondos-postgres-data:
+  bondos-redis-data:

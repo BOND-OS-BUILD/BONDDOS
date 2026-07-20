@@ -1,0 +1,2306 @@
+// BOND OS database schema.
+//
+// User/Session/Account/Verification match Better Auth's expected Prisma
+// shape (see packages/auth/src/server.ts) so the Prisma adapter works with
+// zero field-name remapping. `User.image` is intentionally kept as the
+// Prisma/Better-Auth property name (mapped to the `avatar` column) — the API
+// layer renames it to `avatar` at the DTO boundary to match product naming
+// without touching Better Auth internals.
+//
+// Organization <-> User is many-to-many via Membership (per-org role), so a
+// user can belong to multiple organizations — see docs/Architecture.md.
+//
+// Phase 1 (Knowledge Graph Foundation) adds the structured company memory —
+// Project/Task/Document/Meeting/Customer/Email — every one of them keyed
+// directly off `organizationId` (not just reachable via a join), which is
+// what lets `requireRole(organizationId, role)` authorize any query cheaply.
+// "Company" in the Phase 1 spec is deliberately *not* a separate table — its
+// fields (description/website/industry/size) were added directly onto
+// Organization, since the spec's own rule ("everything must belong to an
+// Organization") and Organization's existing id/name/slug/logo made a
+// parallel Company row redundant. See docs/Architecture.md.
+//
+// Phase 2 (Data Layer Foundation) adds the ingestion/indexing layer: a
+// generic `Entity` system (+ `KnowledgeDocument`/`Contact`/`Website` detail
+// tables), `Chunk`/`Folder`/`Attachment`/`Source`, and `Connector`/`SyncJob`
+// tracking. Phase 2's `KnowledgeDocument` is deliberately NOT named `Document`
+// — that name is already Phase 1's project/meeting-scoped file attachment
+// model, which this phase must not modify. The two are separate subsystems
+// that happen to both be "documents" conceptually; see docs/data-layer.md.
+//
+// Phase 3 (Knowledge Graph) reuses `Entity` as the graph's node table — it
+// already has the id/type/title/description/metadata/org/timestamps shape a
+// node needs — and extends `EntityType` with PERSON/COMPANY/PROJECT/TASK/
+// PRODUCT/EVENT. Edges are a *new* `Relationship` model (typed
+// `relationshipType` + `confidence` + `createdBy`), left alongside Phase 2's
+// `EntityRelationship` rather than retrofitting it — `EntityRelationship`
+// still has no real caller, so nothing regresses, and `relationType` staying
+// a free-form `String` there isn't touched. See docs/knowledge-graph.md.
+//
+// Phase 4 (AI Memory & Retrieval) adds pgvector-backed embeddings. Prisma has
+// no native vector column type, the same situation `tsvector` was already in
+// (see search.ts) — resolved the same way: `postgresqlExtensions` +
+// `Unsupported("vector(N)")`, with actual reads/writes going through
+// `$queryRaw`/`$executeRaw`. `Embedding` is deliberately polymorphic
+// (sourceType/sourceId, not a hard FK) since it covers four different source
+// tables (Chunk/Entity-as-NOTE/Email/Meeting) — see docs/vector-search.md.
+// `EmbeddingJob` mirrors Phase 2's `SyncJob` (one row per attempt, retryable,
+// no real worker yet). No chat, no agents — see docs/embeddings.md.
+
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../src/generated"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  ARCHIVED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+  CANCELLED
+}
+
+/// Shared by Project and Task.
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum DocumentType {
+  PDF
+  DOCX
+  PPT
+  SPREADSHEET
+  NOTE
+  OTHER
+}
+
+enum CustomerStatus {
+  LEAD
+  ACTIVE
+  CHURNED
+  ARCHIVED
+}
+
+enum EmailDirection {
+  INCOMING
+  OUTGOING
+}
+
+/// The universal Entity system's type discriminator (Phase 2). MEETING/
+/// CUSTOMER/EMAIL/NOTE have no dedicated detail table yet — nothing
+/// populates them this phase — but exist here for forward-compatibility
+/// with future connector-sourced content.
+///
+/// Phase 3 adds PERSON/COMPANY/PROJECT/TASK/PRODUCT/EVENT for the knowledge
+/// graph's extraction engine. PERSON is deliberately distinct from CONTACT —
+/// CONTACT is a Phase 2 manually-added contact, PERSON is what Phase 3's
+/// extraction engine creates automatically — but both share the `Contact`
+/// detail table (name/email/phone/company/jobTitle), the same "two entity
+/// types, one detail table" reasoning `KnowledgeDocument` already uses for
+/// DOCUMENT/FILE. PROJECT/TASK entities represent mentions extracted from
+/// document text, not Phase 1's real `Project`/`Task` rows (untouched) — see
+/// docs/knowledge-graph.md.
+enum EntityType {
+  DOCUMENT
+  MEETING
+  NOTE
+  CUSTOMER
+  EMAIL
+  CONTACT
+  WEBSITE
+  FILE
+  PERSON
+  COMPANY
+  PROJECT
+  TASK
+  PRODUCT
+  EVENT
+}
+
+enum ParseStatus {
+  PENDING
+  PARSED
+  FAILED
+  UNSUPPORTED
+}
+
+/// No embeddings yet — this just classifies chunk structure. See Chunk.
+enum ChunkType {
+  PARAGRAPH
+  HEADING
+  TABLE
+  LIST
+  CODE_BLOCK
+}
+
+enum ConnectorProvider {
+  GOOGLE_DRIVE
+  GMAIL
+  NOTION
+  SLACK
+  GITHUB
+  GOOGLE_CALENDAR
+  ONEDRIVE
+}
+
+enum ConnectorStatus {
+  DISCONNECTED
+  CONNECTED
+  ERROR
+  SYNCING
+}
+
+enum SyncJobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  RETRYING
+}
+
+enum SyncTrigger {
+  MANUAL
+  SCHEDULED
+  WEBHOOK
+  INCREMENTAL
+}
+
+model User {
+  id            String     @id @default(cuid())
+  name          String
+  email         String     @unique
+  emailVerified Boolean    @default(false)
+  /// Avatar URL. Prisma/Better-Auth property is `image`; the API layer exposes it as `avatar`.
+  image         String?    @map("avatar")
+  firstName     String?
+  lastName      String?
+  title         String?
+  department    String?
+  phone         String?
+  timezone      String?
+  status        UserStatus @default(ACTIVE)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  sessions    Session[]
+  accounts    Account[]
+  memberships Membership[]
+
+  ownedProjects      Project[]        @relation("ProjectOwner")
+  assignedTasks      Task[]           @relation("TaskAssignee")
+  uploadedDocuments  Document[]       @relation("DocumentUploader")
+  projectMemberships ProjectMember[]
+  meetingAttendances MeetingAttendee[]
+
+  createdEntities            Entity[]            @relation("EntityCreator")
+  createdFolders              Folder[]
+  uploadedKnowledgeDocuments  KnowledgeDocument[] @relation("KnowledgeDocumentUploader")
+  connectedConnectors         Connector[]
+  createdRelationships        Relationship[]      @relation("RelationshipCreatedBy")
+  aiAuditLogs                 AiAuditLog[]
+  createdConversations        Conversation[]      @relation("ConversationCreatedBy")
+  messages                    Message[]
+  updatedAiSettings           OrganizationAiSettings[] @relation("OrganizationAiSettingsUpdatedBy")
+  createdExecutionPlans        ExecutionPlan[]     @relation("ExecutionPlanCreatedBy")
+  approvedApprovalRequests     ApprovalRequest[]   @relation("ApprovalRequestApprovedBy")
+  createdToolExecutions        ToolExecution[]     @relation("ToolExecutionCreatedBy")
+  auditEventsCaused             AuditEvent[]        @relation("AuditEventUser")
+  createdAgentGoals              AgentGoal[]         @relation("AgentGoalCreatedBy")
+  ownedWorkflowDefinitions        WorkflowDefinition[] @relation("WorkflowDefinitionOwner")
+  authoredComments                Comment[]           @relation("CommentAuthor")
+  resolvedComments                Comment[]           @relation("CommentResolvedBy")
+  mentionsOfMe                    Mention[]           @relation("MentionedUser")
+  notifications                   Notification[]
+  createdSpaces                   Space[]             @relation("SpaceCreatedBy")
+  spaceMemberships                SpaceMember[]
+  sharedConversationsWithMe       ConversationShare[]  @relation("ConversationShareRecipient")
+  conversationSharesCreated       ConversationShare[]  @relation("ConversationShareCreatedBy")
+  entityVersionSnapshotsEdited    EntityVersionSnapshot[] @relation("EntityVersionSnapshotEditedBy")
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+/// OAuth accounts and/or the user's hashed credentials (Better Auth stores the
+/// password hash on the `credential` provider Account row, not on User).
+model Account {
+  id                    String    @id @default(cuid())
+  userId                String
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  idToken               String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+/// Email verification / password reset tokens.
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verifications")
+}
+
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  logo        String?
+  description String?
+  website     String?
+  industry    String?
+  size        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  memberships Membership[]
+  workspace   Workspace?
+
+  projects  Project[]
+  tasks     Task[]
+  documents Document[]
+  meetings  Meeting[]
+  customers Customer[]
+  emails    Email[]
+
+  entities             Entity[]
+  folders              Folder[]
+  sources              Source[]
+  knowledgeDocuments   KnowledgeDocument[]
+  attachments          Attachment[]
+  contacts             Contact[]
+  websites             Website[]
+  tags                 Tag[]
+  entityRelationships  EntityRelationship[]
+  connectors           Connector[]
+  syncJobs             SyncJob[]
+  relationships        Relationship[]
+  timelineEvents       TimelineEvent[]
+  embeddings           Embedding[]
+  embeddingJobs        EmbeddingJob[]
+  aiAuditLogs          AiAuditLog[]
+  conversations        Conversation[]
+  messages             Message[]
+  aiSettings           OrganizationAiSettings?
+  executionPlans       ExecutionPlan[]
+  approvalRequests     ApprovalRequest[]
+  toolExecutions       ToolExecution[]
+  auditEvents          AuditEvent[]
+  agentGoals           AgentGoal[]
+  insights             Insight[]
+  agentTimelineEvents  AgentTimelineEvent[]
+  workflowDefinitions  WorkflowDefinition[]
+  workflowRuns         WorkflowRun[]
+  events               Event[]
+  workflowSchedules    WorkflowSchedule[]
+  comments             Comment[]
+  mentions             Mention[]
+  notifications        Notification[]
+  spaces               Space[]
+  conversationShares   ConversationShare[]
+  entityVersionSnapshots EntityVersionSnapshot[]
+
+  @@map("organizations")
+}
+
+/// Join table linking users to organizations with a per-organization role.
+model Membership {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           Role     @default(MEMBER)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@map("memberships")
+}
+
+/// Every organization automatically gets exactly one workspace; future
+/// AI-facing modules (Search, Agents) attach here.
+model Workspace {
+  id             String   @id @default(cuid())
+  organizationId String   @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("workspaces")
+}
+
+model Project {
+  id             String        @id @default(cuid())
+  organizationId String
+  title          String
+  description    String?
+  status         ProjectStatus @default(PLANNING)
+  priority       Priority      @default(MEDIUM)
+  startDate      DateTime?
+  dueDate        DateTime?
+  ownerId        String?
+  /// Phase 9, additive — optimistic-locking version for Shared Editing. Every
+  /// versioned update increments this and snapshots the prior state to
+  /// `EntityVersionSnapshot`; a caller-supplied stale version fails with
+  /// `ConflictError` rather than silently overwriting a concurrent edit.
+  version        Int           @default(1)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner        User?        @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  tasks     Task[]
+  documents Document[]
+  meetings  Meeting[]
+  members   ProjectMember[]
+  emails    Email[]
+  customers Customer[]
+
+  @@index([organizationId])
+  @@index([ownerId])
+  @@map("projects")
+}
+
+/// Many-to-many: which users are members of a project.
+model ProjectMember {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@map("project_members")
+}
+
+model Task {
+  id             String     @id @default(cuid())
+  organizationId String
+  projectId      String
+  title          String
+  description    String?
+  status         TaskStatus @default(TODO)
+  priority       Priority   @default(MEDIUM)
+  dueDate        DateTime?
+  completedAt    DateTime?
+  assigneeId     String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee     User?        @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  documents TaskDocument[]
+
+  @@index([organizationId])
+  @@index([projectId])
+  @@index([assigneeId])
+  @@map("tasks")
+}
+
+/// Many-to-many: documents a task references, and the tasks a document supports.
+model TaskDocument {
+  id         String   @id @default(cuid())
+  taskId     String
+  documentId String
+  createdAt  DateTime @default(now())
+
+  task     Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, documentId])
+  @@index([documentId])
+  @@map("task_documents")
+}
+
+model Document {
+  id             String       @id @default(cuid())
+  organizationId String
+  title          String
+  description    String?
+  type           DocumentType @default(OTHER)
+  fileName       String
+  mimeType       String
+  size           Int
+  storagePath    String
+  projectId      String?
+  meetingId      String?
+  uploadedById   String?
+  /// Phase 9, additive — see the identical note on `Project.version`.
+  version        Int          @default(1)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  meeting      Meeting?     @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  uploadedBy   User?        @relation("DocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  tasks TaskDocument[]
+
+  @@index([organizationId])
+  @@index([projectId])
+  @@index([meetingId])
+  @@index([uploadedById])
+  @@map("documents")
+}
+
+model Meeting {
+  id             String   @id @default(cuid())
+  organizationId String
+  projectId      String
+  title          String
+  agenda         String?
+  notes          String?
+  location       String?
+  meetingDate    DateTime
+  /// Duration in minutes.
+  duration       Int?
+  /// Phase 9, additive — see the identical note on `Project.version`.
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  attendees MeetingAttendee[]
+  documents Document[]
+
+  @@index([organizationId])
+  @@index([projectId])
+  @@map("meetings")
+}
+
+/// Many-to-many: which users attend a meeting.
+model MeetingAttendee {
+  id        String   @id @default(cuid())
+  meetingId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, userId])
+  @@index([userId])
+  @@map("meeting_attendees")
+}
+
+model Customer {
+  id             String         @id @default(cuid())
+  organizationId String
+  name           String
+  /// The customer's own company name (an external company, not our tenant Organization).
+  company        String?
+  email          String?
+  phone          String?
+  website        String?
+  status         CustomerStatus @default(LEAD)
+  notes          String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  emails   Email[]
+  projects Project[]
+
+  @@index([organizationId])
+  @@map("customers")
+}
+
+/// Metadata only — not a Gmail/mail-provider integration. Direction is
+/// relative to the organization (INCOMING = customer -> us).
+model Email {
+  id             String         @id @default(cuid())
+  organizationId String
+  customerId     String
+  projectId      String?
+  subject        String
+  sender         String
+  recipient      String
+  sentAt         DateTime
+  direction      EmailDirection
+  createdAt      DateTime       @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([customerId])
+  @@index([projectId])
+  @@map("emails")
+}
+
+// ── Phase 2: Data Layer Foundation ──────────────────────────────────────────
+// Universal Entity system + detail tables, file/document ingestion, chunking,
+// connectors, and sync tracking. See docs/data-layer.md.
+
+/// The universal base row every Phase 2 content type shares (title,
+/// description, tags, metadata, org, creator, timestamps). Type-specific
+/// structured fields live on a 1:1 detail table (KnowledgeDocument/Contact/
+/// Website) referencing `entityId`.
+model Entity {
+  id             String     @id @default(cuid())
+  organizationId String
+  creatorId      String?
+  entityType     EntityType
+  title          String
+  description    String?
+  /// Free-form type-specific metadata not worth a dedicated column.
+  metadata       Json?
+  /// Phase 9, additive — see the identical note on `Project.version`. In
+  /// practice only exercised for `entityType = NOTE` rows today (the only
+  /// `Entity` content this codebase lets a user directly edit), but the
+  /// mechanism is generic to `Entity`.
+  version        Int        @default(1)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  creator      User?        @relation("EntityCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+
+  knowledgeDocument KnowledgeDocument?
+  contact           Contact?
+  website           Website?
+  attachments       Attachment[]
+  tags              EntityTag[]
+
+  outgoingRelationships EntityRelationship[] @relation("EntityRelationshipSource")
+  incomingRelationships EntityRelationship[] @relation("EntityRelationshipTarget")
+
+  outgoingGraphRelationships Relationship[]   @relation("RelationshipSource")
+  incomingGraphRelationships Relationship[]   @relation("RelationshipTarget")
+  timelineEvents             TimelineEvent[]
+
+  @@index([organizationId])
+  @@index([organizationId, entityType])
+  @@map("entities")
+}
+
+/// Organizes KnowledgeDocuments into a folder tree, like a virtual filesystem.
+model Folder {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  parentFolderId String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parentFolder Folder?             @relation("FolderChildren", fields: [parentFolderId], references: [id], onDelete: Cascade)
+  childFolders Folder[]            @relation("FolderChildren")
+  createdBy    User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  documents    KnowledgeDocument[]
+
+  @@index([organizationId])
+  @@index([parentFolderId])
+  @@map("folders")
+}
+
+/// Where a KnowledgeDocument came from — a manual upload (`connectorId` null)
+/// or a specific Connector sync.
+model Source {
+  id             String   @id @default(cuid())
+  organizationId String
+  connectorId    String?
+  name           String
+  externalId     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connector    Connector?          @relation(fields: [connectorId], references: [id], onDelete: SetNull)
+  documents    KnowledgeDocument[]
+
+  @@index([organizationId])
+  @@index([connectorId])
+  @@map("sources")
+}
+
+/// Phase 2's ingestion-layer document — deliberately NOT named `Document`
+/// (see the header comment). Backs both DOCUMENT- and FILE-type Entities,
+/// since a generic uploaded file and a parsed document are structurally
+/// identical. `parsedText`/`parsedPages`/`parsedMetadata` are populated by
+/// `@bond-os/parsers`; no embeddings are stored here (see Chunk).
+model KnowledgeDocument {
+  id             String      @id @default(cuid())
+  entityId       String      @unique
+  organizationId String
+  folderId       String?
+  sourceId       String?
+  fileName       String
+  mimeType       String
+  size           Int
+  storagePath    String
+  uploadedById   String?
+  parseStatus    ParseStatus @default(PENDING)
+  parsedText     String?
+  /// Array of per-page extracted text, where the format has pages (e.g. PDF).
+  parsedPages    Json?
+  parsedMetadata Json?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  entity       Entity       @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  folder       Folder?      @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  source       Source?      @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  uploadedBy   User?        @relation("KnowledgeDocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  chunks       Chunk[]
+
+  @@index([organizationId])
+  @@index([folderId])
+  @@index([sourceId])
+  @@map("knowledge_documents")
+}
+
+/// A structural slice of a KnowledgeDocument's parsed text. No embedding
+/// column yet ("prepare for vector search later, no embeddings now") — this
+/// table's shape is ready for one to be added in a future migration.
+/// `contentHash` (sha256) lets a future re-sync detect unchanged chunks.
+model Chunk {
+  id                  String    @id @default(cuid())
+  knowledgeDocumentId String
+  chunkType           ChunkType @default(PARAGRAPH)
+  /// Order within the parent document, zero-based.
+  position            Int
+  content              String
+  contentHash          String
+  pageNumber           Int?
+  createdAt            DateTime @default(now())
+
+  knowledgeDocument KnowledgeDocument @relation(fields: [knowledgeDocumentId], references: [id], onDelete: Cascade)
+
+  @@index([knowledgeDocumentId])
+  @@index([knowledgeDocumentId, position])
+  @@map("chunks")
+}
+
+/// A secondary file attached to any Entity (e.g. an ingested email's
+/// attachment) — distinct from a KnowledgeDocument, which is itself the
+/// primary file content of a DOCUMENT/FILE entity.
+model Attachment {
+  id             String   @id @default(cuid())
+  entityId       String
+  organizationId String
+  fileName       String
+  mimeType       String
+  size           Int
+  storagePath    String
+  createdAt      DateTime @default(now())
+
+  entity       Entity       @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([entityId])
+  @@index([organizationId])
+  @@map("attachments")
+}
+
+/// Detail table for CONTACT-type Entities.
+model Contact {
+  id             String   @id @default(cuid())
+  entityId       String   @unique
+  organizationId String
+  name           String
+  email          String?
+  phone          String?
+  company        String?
+  jobTitle       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  entity       Entity       @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("contacts")
+}
+
+/// Detail table for WEBSITE-type Entities.
+model Website {
+  id             String    @id @default(cuid())
+  entityId       String    @unique
+  organizationId String
+  url            String
+  faviconUrl     String?
+  lastCrawledAt  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  entity       Entity       @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("websites")
+}
+
+model Tag {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  color          String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  entities     EntityTag[]
+
+  @@unique([organizationId, name])
+  @@map("tags")
+}
+
+/// Many-to-many: Entity <-> Tag.
+model EntityTag {
+  id        String   @id @default(cuid())
+  entityId  String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  entity Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([entityId, tagId])
+  @@index([tagId])
+  @@map("entity_tags")
+}
+
+/// The generic knowledge-graph edge: any Entity can relate to any other
+/// Entity with a free-form `relationType` (e.g. "MENTIONS", "RELATED_TO"),
+/// complementing Phase 1's specific FK-based relationships.
+model EntityRelationship {
+  id             String   @id @default(cuid())
+  organizationId String
+  sourceEntityId String
+  targetEntityId String
+  relationType   String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sourceEntity Entity       @relation("EntityRelationshipSource", fields: [sourceEntityId], references: [id], onDelete: Cascade)
+  targetEntity Entity       @relation("EntityRelationshipTarget", fields: [targetEntityId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceEntityId, targetEntityId, relationType])
+  @@index([organizationId])
+  @@index([targetEntityId])
+  @@map("entity_relationships")
+}
+
+/// A per-organization connection to an external provider. `config` is a
+/// placeholder for future OAuth tokens/settings — no real secrets are stored
+/// by this phase (no OAuth flow exists yet).
+model Connector {
+  id             String            @id @default(cuid())
+  organizationId String
+  provider       ConnectorProvider
+  status         ConnectorStatus   @default(DISCONNECTED)
+  config         Json?
+  connectedById  String?
+  lastSyncAt     DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connectedBy  User?        @relation(fields: [connectedById], references: [id], onDelete: SetNull)
+  sources      Source[]
+  syncJobs     SyncJob[]
+
+  @@unique([organizationId, provider])
+  @@index([organizationId])
+  @@map("connectors")
+}
+
+/// One row per sync run — history/status/retry tracking. No background
+/// worker actually executes these yet; rows are created synchronously by a
+/// manual "Sync now" trigger (see docs/connectors.md).
+model SyncJob {
+  id             String        @id @default(cuid())
+  organizationId String
+  connectorId    String
+  status         SyncJobStatus @default(PENDING)
+  trigger        SyncTrigger   @default(MANUAL)
+  startedAt      DateTime      @default(now())
+  completedAt    DateTime?
+  itemsProcessed Int           @default(0)
+  itemsFailed    Int           @default(0)
+  errorMessage   String?
+  retryCount     Int           @default(0)
+  createdAt      DateTime      @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connector    Connector    @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([connectorId])
+  @@map("sync_jobs")
+}
+
+// ── Phase 3: Knowledge Graph ────────────────────────────────────────────────
+// Deterministic graph edges, timeline, and the extraction/resolution engine
+// that populates them. No AI/embeddings/LLMs — rule-based only. Nodes reuse
+// `Entity` (extended `EntityType` above); see docs/knowledge-graph.md,
+// docs/entity-resolution.md, docs/relationships.md, docs/timeline.md.
+
+/// The 5 relationship types this phase's extraction engine actually detects
+/// automatically are MENTIONED_IN/RELATED_TO/PART_OF/ATTENDED/WORKS_AT — the
+/// rest exist for the manual relationship API and future automatic detection
+/// (see docs/relationships.md for exactly which is which). TAGGED_WITH is
+/// never stored as a row here — it's synthesized at query time from the
+/// existing `EntityTag` table, so tagging isn't duplicated.
+enum RelationshipType {
+  WORKS_AT
+  OWNS
+  CREATED
+  MENTIONED_IN
+  RELATED_TO
+  PART_OF
+  BELONGS_TO
+  REPORTS_TO
+  ATTENDED
+  SENT
+  RECEIVED
+  REFERENCES
+  DUPLICATE_OF
+  TAGGED_WITH
+  DEPENDS_ON
+}
+
+/// The knowledge graph's typed edge table. Deliberately a new model, not a
+/// retrofit of Phase 2's `EntityRelationship` (see the header comment) —
+/// `confidence` lets deterministic-but-fuzzy detections (e.g. proximity-based
+/// WORKS_AT) be distinguished from certain ones (e.g. an exact document
+/// mention) without any ML.
+model Relationship {
+  id               String           @id @default(cuid())
+  organizationId   String
+  sourceEntityId   String
+  targetEntityId   String
+  relationshipType RelationshipType
+  /// 1.0 for deterministic/certain detections; lower for heuristic ones (e.g. proximity-based WORKS_AT).
+  confidence       Float            @default(1.0)
+  createdById      String?
+  createdAt        DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sourceEntity Entity       @relation("RelationshipSource", fields: [sourceEntityId], references: [id], onDelete: Cascade)
+  targetEntity Entity       @relation("RelationshipTarget", fields: [targetEntityId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("RelationshipCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([sourceEntityId, targetEntityId, relationshipType])
+  @@index([organizationId])
+  @@index([sourceEntityId])
+  @@index([targetEntityId])
+  @@map("relationships")
+}
+
+/// AI_ACTION was reserved in Phase 3 for "future AI actions" — Phase 4 is
+/// that future phase: the embedding pipeline appends one AI_ACTION event per
+/// document once its chunks are embedded. See docs/embeddings.md.
+enum TimelineEventType {
+  CREATED
+  MODIFIED
+  UPLOADED
+  MENTIONED
+  CONNECTED
+  VIEWED
+  AI_ACTION
+}
+
+/// Every Entity's chronological activity feed. Append-only.
+model TimelineEvent {
+  id             String            @id @default(cuid())
+  organizationId String
+  entityId       String
+  eventType      TimelineEventType
+  description    String
+  metadata       Json?
+  createdAt      DateTime          @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  entity       Entity       @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([entityId, createdAt])
+  @@map("timeline_events")
+}
+
+// ── Phase 4: AI Memory & Retrieval Layer ────────────────────────────────────
+// Pluggable embeddings + pgvector storage + retryable embedding jobs + AI
+// request audit logging. No chat/agents/generation is invoked anywhere in
+// this phase — see docs/embeddings.md, docs/vector-search.md, docs/ai-service.md.
+
+/// The four source tables Phase 4 embeds. CHUNK is the normal case (a
+/// KnowledgeDocument may have many); NOTE embeds `Entity.description` for
+/// entityType=NOTE (Phase 2 gave NOTE no dedicated table, so description is
+/// its only content); EMAIL embeds `Email.subject` (Phase 1's Email is
+/// metadata-only, no body field exists); MEETING embeds `Meeting.agenda` +
+/// `Meeting.notes`.
+enum EmbeddingSourceType {
+  CHUNK
+  NOTE
+  EMAIL
+  MEETING
+}
+
+/// Polymorphic by design (sourceType/sourceId, not a hard FK) — a single
+/// embeddings table spanning four unrelated source tables can't use a normal
+/// Prisma relation. `vector` is `Unsupported` (Prisma has no native pgvector
+/// type, the same situation `search.ts` already handles for `tsvector`) — it
+/// can't be read/written through the normal Prisma Client; every actual
+/// vector read/write goes through `$queryRaw`/`$executeRaw` in
+/// `packages/database/src/repositories/embeddings.ts`, which is also where
+/// the "always filter by organizationId in the same query" guarantee lives.
+/// 1536 is fixed (OpenAI text-embedding-3-small's size) because the HNSW
+/// index needs one constant dimension — see docs/vector-search.md for what
+/// changing providers/dimensions requires.
+model Embedding {
+  id               String              @id @default(cuid())
+  organizationId   String
+  sourceType       EmbeddingSourceType
+  sourceId         String
+  /// The exact text that was embedded — kept so citations don't need to re-derive it from the source row.
+  content          String
+  embeddingModel   String
+  embeddingVersion String
+  dimensions       Int
+  vector           Unsupported("vector(1536)")?
+  createdAt        DateTime            @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// One current embedding per source — re-embedding upserts (replaces), it never accumulates stale rows from a previous model.
+  /// organizationId leads the compound key (not just [sourceType, sourceId]) so
+  /// the write path is unconditionally tenant-scoped at the database level too,
+  /// not only by virtue of every caller happening to pre-validate sourceId
+  /// ownership before calling upsertEmbedding — see docs/vector-search.md.
+  @@unique([organizationId, sourceType, sourceId])
+  @@index([organizationId])
+  @@map("embeddings")
+}
+
+enum EmbeddingJobType {
+  GENERATE
+  REINDEX
+  REBUILD
+  DELETE
+}
+
+enum EmbeddingJobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  RETRYING
+}
+
+/// One row per embedding attempt — mirrors Phase 2's `SyncJob` exactly (same
+/// retry/history shape, same "no real worker loop yet, triggered manually"
+/// honesty). A "Retry Failed Jobs" service finds FAILED rows and re-attempts,
+/// incrementing retryCount.
+model EmbeddingJob {
+  id             String              @id @default(cuid())
+  organizationId String
+  jobType        EmbeddingJobType    @default(GENERATE)
+  sourceType     EmbeddingSourceType
+  sourceId       String
+  status         EmbeddingJobStatus  @default(PENDING)
+  provider       String?
+  errorMessage   String?
+  retryCount     Int                 @default(0)
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime            @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("embedding_jobs")
+}
+
+/// Audit trail for AI-related requests (retrieval calls, embedding
+/// generation) — Security §15's "audit logging for AI requests." Not tied to
+/// one Entity (unlike TimelineEvent), since a search request isn't about any
+/// single entity. `metadata` also carries lightweight observability data
+/// (durationMs, resultCount) — see docs/retrieval.md.
+model AiAuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  action         String
+  provider       String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([createdAt])
+  @@map("ai_audit_logs")
+}
+
+// ── Phase 5: Mr. Bond AI Copilot ────────────────────────────────────────────
+// Read-only RAG chat. Every answer goes through Phase 4's Retrieval Layer
+// (hybridSearch/buildContext/buildPrompt/AI provider `stream()`) — no
+// autonomous agents, no writes, no multi-agent systems. See docs/mr-bond.md,
+// docs/chat.md, docs/rag.md.
+
+enum MessageRole {
+  SYSTEM
+  USER
+  ASSISTANT
+  TOOL
+}
+
+/// A chat thread. `createdById` nullable (SetNull) so deleting a user doesn't
+/// cascade-delete organization conversation history — same "history survives
+/// the actor" reasoning as `Relationship.createdBy`/`Folder.createdBy`.
+model Conversation {
+  id             String   @id @default(cuid())
+  organizationId String
+  createdById    String?
+  title          String?
+  pinned         Boolean  @default(false)
+  archived       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("ConversationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  messages     Message[]
+  executionPlans   ExecutionPlan[]
+  toolExecutions   ToolExecution[]
+  agentGoals           AgentGoal[]
+  agentTimelineEvents  AgentTimelineEvent[]
+  shares               ConversationShare[]
+
+  @@index([organizationId])
+  @@index([organizationId, pinned])
+  @@index([organizationId, archived])
+  @@map("conversations")
+}
+
+/// `organizationId` is denormalized directly onto Message (not just reachable
+/// via conversationId) — matching Entity/Relationship/TimelineEvent/Embedding's
+/// own convention, so cost/observability aggregation never needs a join.
+/// `userId` is null for ASSISTANT/SYSTEM/TOOL rows (only a USER message has an
+/// author). `citations`/`metadata`/`tokenUsage` are Json — citations are
+/// re-resolved via resolveCitationService before being persisted here, so a
+/// hallucinated ref never lands in this column (see docs/citations.md).
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String
+  organizationId String
+  userId         String?
+  role           MessageRole
+  content        String
+  citations      Json?
+  metadata       Json?
+  tokenUsage     Json?
+  model          String?
+  createdAt      DateTime    @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@index([organizationId])
+  @@map("messages")
+}
+
+/// One row per organization, every field nullable — unset fields fall back to
+/// the existing env-var defaults (AI_PROVIDER/AI_MODEL/AI_TEMPERATURE/
+/// AI_MAX_TOKENS/CONTEXT_TOKEN_BUDGET), the same "always have a working
+/// zero-config default" pattern as Cache/Queue/EmbeddingProvider. Phase 4's
+/// `/ai` page explicitly deferred a settings UI to "a future phase" — this is
+/// that phase.
+model OrganizationAiSettings {
+  id                String   @id @default(cuid())
+  organizationId    String   @unique
+  provider          String?
+  model             String?
+  temperature       Float?
+  topP              Float?
+  maxTokens         Int?
+  streamingEnabled  Boolean  @default(true)
+  contextWindow     Int?
+  retrievalDepth    Int?
+  updatedById       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  updatedBy    User?        @relation("OrganizationAiSettingsUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("organization_ai_settings")
+}
+
+// ── Phase 6: Tool Execution Framework ───────────────────────────────────────
+// A generic, approval-gated framework so Mr. Bond can propose and — only
+// after explicit user approval — execute writes. The read-only tool-calling
+// path from Phase 5 (apps/web/features/bond/services/tool-calling.service.ts)
+// is untouched by this section entirely. A Tool's actual BEHAVIOR (validate/
+// preview/execute/rollback) lives in code (apps/web/features/tools/), never
+// in the DB — functions aren't storable — the `Tool` model below is a
+// queryable metadata snapshot synced from the in-memory registry, not the
+// execution hot path. See docs/tool-execution.md, docs/planner.md,
+// docs/approvals.md, docs/rollback.md.
+
+enum ToolCategory {
+  PROJECTS
+  TASKS
+  MEETINGS
+  CUSTOMERS
+  DOCUMENTS
+  NOTES
+  EMAILS
+  KNOWLEDGE_GRAPH
+  CRM
+  FILES
+  ANALYTICS
+  SYSTEM
+}
+
+enum RollbackSupport {
+  AUTOMATIC
+  MANUAL
+  NOT_SUPPORTED
+}
+
+/// A single execution's overall lifecycle state — DRAFT (plan built, not yet
+/// previewed) through the approval gate to a terminal SUCCEEDED/FAILED/
+/// ROLLED_BACK/CANCELLED. Nothing past AWAITING_APPROVAL is reachable without
+/// ApprovalService's atomic status transition — see docs/approvals.md.
+enum ExecutionStatus {
+  DRAFT
+  AWAITING_APPROVAL
+  APPROVED
+  REJECTED
+  EXPIRED
+  EXECUTING
+  SUCCEEDED
+  FAILED
+  ROLLING_BACK
+  ROLLED_BACK
+  CANCELLED
+}
+
+enum StepStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+  ROLLED_BACK
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+enum RollbackRecordStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+/// Registered-tool metadata, synced from the in-memory ToolRegistry on first
+/// access each process lifetime (idempotent upsert by [toolKey, version]).
+/// `toolKey` is the stable slug ("create_project"); `id` stays a cuid for FK
+/// consistency with every other model in this schema. Not organization-
+/// scoped — a registered tool applies to every organization.
+model Tool {
+  id                   String          @id @default(cuid())
+  toolKey              String
+  version              String
+  name                 String
+  displayName          String
+  description          String
+  category             ToolCategory
+  icon                 String
+  minimumRole          Role
+  parametersSchema     Json
+  outputSchema         Json
+  supportsRollback     Boolean         @default(false)
+  rollbackSupport      RollbackSupport @default(NOT_SUPPORTED)
+  supportsPreview      Boolean         @default(true)
+  supportsDryRun       Boolean         @default(true)
+  supportsTransactions Boolean         @default(true)
+  requiresApproval     Boolean         @default(true)
+  estimatedExecutionMs Int
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  executions ToolExecution[]
+
+  @@unique([toolKey, version])
+  @@map("tools")
+}
+
+/// A Planner-built, not-yet-approved plan. `steps`/`graph` are Json — see
+/// docs/planner.md for the exact ExecutionStepDefinition/layer shapes. `planHash`
+/// (sha256 of the canonicalized steps+params, using @bond-os/parsers' existing
+/// `hashContent`) is recomputed at execution time and compared — a mismatch
+/// hard-fails rather than executing a possibly-tampered plan.
+model ExecutionPlan {
+  id               String   @id @default(cuid())
+  organizationId   String
+  conversationId   String?
+  createdById      String?
+  summary          String
+  steps            Json
+  graph            Json
+  planHash         String
+  estimatedTimeMs  Int
+  rollbackStrategy RollbackSupport
+  createdAt        DateTime @default(now())
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation?    @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  createdBy    User?            @relation("ExecutionPlanCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approval     ApprovalRequest?
+  execution    ToolExecution?
+
+  @@index([organizationId])
+  @@map("execution_plans")
+}
+
+/// The approval gate itself. Single-use/replay protection is an atomic,
+/// org-scoped conditional `updateMany` (status = PENDING AND not expired ->
+/// APPROVED), not a signature — see docs/approvals.md for why a signed token
+/// was considered and dropped. `requiredRole` is computed as the max
+/// ROLE_HIERARCHY severity across every step's tool in the plan, never
+/// client-supplied.
+model ApprovalRequest {
+  id             String         @id @default(cuid())
+  planId         String         @unique
+  organizationId String
+  requiredRole   Role
+  status         ApprovalStatus @default(PENDING)
+  approvedById   String?
+  approvedAt     DateTime?
+  expiresAt      DateTime
+  createdAt      DateTime       @default(now())
+
+  plan         ExecutionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  approvedBy   User?         @relation("ApprovalRequestApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("approval_requests")
+}
+
+/// One row per plan execution attempt — mirrors Phase 2's `SyncJob`/Phase 4's
+/// `EmbeddingJob` exactly: a single mutable row, `status` enum, nullable
+/// `startedAt`/`completedAt`, org-scoped `updateMany` (never bare `update`)
+/// for every state transition. Not an append-only log — see `AuditEvent` for
+/// that. `toolId` is nullable and only set for single-step plans — a
+/// compound multi-step plan spans several tools, each already identified by
+/// its own `ExecutionStep.tool` (toolKey); this FK exists for the common
+/// single-tool case's convenience, not as the source of truth for which
+/// tools ran.
+model ToolExecution {
+  id                String               @id @default(cuid())
+  planId            String               @unique
+  toolId            String?
+  organizationId    String
+  conversationId    String?
+  status            ExecutionStatus      @default(DRAFT)
+  startedAt         DateTime?
+  completedAt       DateTime?
+  duration          Int?
+  createdById       String?
+  rollbackStatus    RollbackRecordStatus @default(PENDING)
+  error             String?
+  /// Phase 8: set only when this execution was submitted by a Workflow's
+  /// Invoke-Tool step (via the same `proposeAction()` every other caller
+  /// uses — no separate write path). How the `/api/execution/[id]/approve`
+  /// route-layer hook identifies "resume this WorkflowRun after executing" —
+  /// see docs/workflows.md. Null for every non-workflow execution.
+  workflowRunStepId String?              @unique
+  createdAt         DateTime             @default(now())
+
+  plan            ExecutionPlan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+  tool            Tool?            @relation(fields: [toolId], references: [id], onDelete: SetNull)
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation    Conversation?    @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  createdBy       User?            @relation("ToolExecutionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  workflowRunStep WorkflowRunStep? @relation(fields: [workflowRunStepId], references: [id], onDelete: SetNull)
+  steps           ExecutionStep[]
+  rollback        RollbackRecord?
+  auditEvents     AuditEvent[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("tool_executions")
+}
+
+/// One row per DAG step per execution attempt. `tool` stores the toolKey (not
+/// an FK) — a step's tool is resolved through the plan's own `steps` Json at
+/// plan-build time, and re-validated against the live registry before it
+/// runs; `ExecutionPlan`/`ToolExecution` are the source of truth for a step's
+/// full definition (params/dependsOn/condition/retry), this row is its
+/// runtime status/result.
+model ExecutionStep {
+  id          String     @id @default(cuid())
+  executionId String
+  order       Int
+  tool        String
+  status      StepStatus @default(PENDING)
+  duration    Int?
+  result      Json?
+  rollback    Json?
+  createdAt   DateTime   @default(now())
+
+  execution ToolExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([executionId, order])
+  @@map("execution_steps")
+}
+
+/// One row per execution's rollback attempt (an execution either never needed
+/// one, or has exactly one). A failed rollback is recorded, never silently
+/// swallowed — partial writes with no automatic way back are a real
+/// operational alarm, not a state to hide.
+model RollbackRecord {
+  id          String               @id @default(cuid())
+  executionId String               @unique
+  status      RollbackRecordStatus @default(PENDING)
+  completedAt DateTime?
+  details     Json?
+  createdAt   DateTime             @default(now())
+
+  execution ToolExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@map("rollback_records")
+}
+
+/// Immutable, append-only — mirrors `TimelineEvent`'s "never edited or
+/// deleted" convention. Distinct from Phase 4's `AiAuditLog` (documented
+/// fire-and-forget observability for read/generation calls); this is the
+/// compliance trail for write-lifecycle state transitions (plan_created,
+/// approved, rejected, step_started, step_succeeded, step_failed,
+/// rolled_back, ...).
+model AuditEvent {
+  id             String   @id @default(cuid())
+  organizationId String
+  executionId    String?
+  userId         String?
+  action         String
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  execution    ToolExecution? @relation(fields: [executionId], references: [id], onDelete: SetNull)
+  user         User?          @relation("AuditEventUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([executionId])
+  @@map("audit_events")
+}
+
+// ── Phase 7: Multi-Agent Architecture (AI Workforce) ────────────────────────
+// Mr. Bond becomes a Coordinator over 5 specialist agents. Every write still
+// flows through the unmodified Phase 6 chain (Agent -> Execution Plan ->
+// Approval -> Execution -> Audit) — no agent ever calls a Tool's execute()
+// directly; that remains ExecutionService's sole responsibility. Agent
+// behavior (the 9 SDK methods) lives in code (apps/web/features/agents/),
+// never in the DB — the `Agent` model below is a queryable metadata
+// snapshot, same "code owns behavior, DB stores metadata" split as `Tool`.
+// See docs/agents.md, docs/base-agent.md, docs/agent-registry.md,
+// docs/delegation.md, docs/goals.md, docs/insights.md, docs/multi-agent.md.
+
+enum AgentCategory {
+  COORDINATOR
+  PROJECT
+  SALES
+  OPERATIONS
+  KNOWLEDGE
+  FINANCE
+}
+
+enum AgentRegistryStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum GoalStatus {
+  ACTIVE
+  WAITING
+  COMPLETED
+  CANCELLED
+}
+
+enum GoalStepPhase {
+  PLAN
+  OBSERVE
+  SUGGEST
+  WAIT
+  CONTINUE
+}
+
+/// SYSTEM is reserved and unused — no worker exists anywhere in this codebase
+/// to ever set it (confirmed: no cron/scheduler/queue-consumer exists). Same
+/// "prepare the interface, ship only the working half" pattern already used
+/// by `Queue`/`Cache`. Every `GoalStep` today is `USER`-triggered.
+enum TriggeredBy {
+  USER
+  SYSTEM
+}
+
+enum InsightType {
+  RISK
+  MISSING_INFO
+  CONFLICT
+  DUPLICATE
+  RECOMMENDATION
+}
+
+/// `OPEN` -> `ACKNOWLEDGED`/`DISMISSED` is bookkeeping on the insight row
+/// itself, not domain data — it does not go through the Phase 6 approval
+/// chain (see the model comment on `Insight`).
+enum InsightStatus {
+  OPEN
+  ACKNOWLEDGED
+  DISMISSED
+}
+
+/// The 7 structured event kinds an agent's Timeline records (spec: "store
+/// structured events only, never chain-of-thought").
+enum AgentEventType {
+  THOUGHT_STARTED
+  RETRIEVAL
+  DELEGATION
+  PLAN
+  APPROVAL_REQUEST
+  EXECUTION
+  COMPLETION
+}
+
+/// Registered-agent metadata, synced from the in-memory AgentRegistry on
+/// first access each process lifetime (idempotent upsert by [agentKey,
+/// version]) — mirrors `Tool` exactly, including NOT being organization-
+/// scoped (a registered agent applies to every organization).
+model Agent {
+  id                 String              @id @default(cuid())
+  agentKey           String
+  version            String
+  name               String
+  displayName        String
+  description        String
+  avatar             String
+  category           AgentCategory
+  capabilities       Json
+  supportedTools     Json
+  supportedKnowledge Json
+  priority           Int                 @default(0)
+  model              String?
+  temperature        Float?
+  maxContext         Int?
+  status             AgentRegistryStatus @default(ACTIVE)
+  minimumRole        Role                @default(MEMBER)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  goals          AgentGoal[]
+  insights       Insight[]
+  timelineEvents AgentTimelineEvent[]
+
+  @@unique([agentKey, version])
+  @@map("agents")
+}
+
+/// A long-running goal's immutable definition + current status only —
+/// mirrors `ExecutionPlan`. The actual Plan/Observe/Suggest/Wait/Continue
+/// history lives in `GoalStep` (its own indexed table), not embedded here as
+/// a growing Json array — same "immutable definition vs. queryable,
+/// accumulating history" split Phase 6 already used for
+/// `ExecutionPlan`/`ExecutionStep`. "No automatic execution": `lastActivityAt`
+/// only ever advances from an explicit user action (visiting the goal, an
+/// explicit Continue click) — nothing in this codebase can set it on a timer.
+model AgentGoal {
+  id             String     @id @default(cuid())
+  organizationId String
+  agentId        String
+  conversationId String?
+  createdById    String?
+  title          String
+  originalPlan   Json
+  status         GoalStatus @default(ACTIVE)
+  lastActivityAt DateTime   @default(now())
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent         @relation(fields: [agentId], references: [id], onDelete: Restrict)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  createdBy    User?         @relation("AgentGoalCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  steps        GoalStep[]
+  insights     Insight[]
+
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@map("agent_goals")
+}
+
+/// One row per Plan/Observe/Suggest/Wait/Continue phase actually run for a
+/// goal. `output` is structured only (same discipline as
+/// `AgentTimelineEvent.metadata`) — never a raw prompt/completion dump.
+model GoalStep {
+  id          String        @id @default(cuid())
+  goalId      String
+  order       Int
+  phase       GoalStepPhase
+  output      Json
+  triggeredBy TriggeredBy   @default(USER)
+  createdAt   DateTime      @default(now())
+
+  goal AgentGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@index([goalId, order])
+  @@map("goal_steps")
+}
+
+/// An agent's observation, never a data mutation (spec: "Never modify
+/// data"). `status` is the one field a user can change directly — it's
+/// bookkeeping on the insight itself (acknowledge/dismiss), not a write to
+/// any domain table, so it does not need to go through the Phase 6
+/// Plan -> Approval -> Execution chain.
+model Insight {
+  id               String        @id @default(cuid())
+  organizationId   String
+  agentId          String
+  goalId           String?
+  type             InsightType
+  title            String
+  description      String
+  relatedEntityIds Json
+  status           InsightStatus @default(OPEN)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent        @relation(fields: [agentId], references: [id], onDelete: Restrict)
+  goal         AgentGoal?   @relation(fields: [goalId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@map("insights")
+}
+
+/// Immutable, append-only — mirrors `AuditEvent`/`TimelineEvent`'s "never
+/// edited or deleted" convention. `metadata` is always an explicit,
+/// allowlisted structured DTO per `eventType` (built in
+/// AgentTimelineService) — deliberately never a raw prompt/completion
+/// capture, which is what "never store chain-of-thought" means in practice.
+/// Also powers the Delegation Graph UI (query eventType=DELEGATION for a
+/// conversation) — no separate Delegation table needed.
+model AgentTimelineEvent {
+  id             String         @id @default(cuid())
+  organizationId String
+  agentId        String
+  conversationId String?
+  goalId         String?
+  eventType      AgentEventType
+  metadata       Json
+  createdAt      DateTime       @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent         @relation(fields: [agentId], references: [id], onDelete: Restrict)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([agentId])
+  @@index([conversationId])
+  @@map("agent_timeline_events")
+}
+
+// ── Phase 8: Workflow Automation Platform ───────────────────────────────────
+// Event-driven workflows built by organizations via a visual editor, not
+// developer-registered code — unlike `Tool`/`Agent`, `WorkflowDefinition` is
+// genuinely org-scoped user data (trigger/conditions/graph are all Json).
+// Only the ~10 step-type handlers are developer code (code owns behavior for
+// EXECUTING a step; the graph itself is data). Every write a workflow needs
+// still flows through the unmodified Phase 6 chain via the same
+// `proposeAction()` every other caller uses — no new write path. No
+// background worker exists anywhere in this codebase (confirmed again this
+// phase) — scheduling and Wait/Delay-step resumption both go through one
+// externally-triggered tick endpoint, and the Event Bus is synchronous/
+// in-process, wrapped so a workflow can never break the write that triggered
+// it. See docs/workflows.md, docs/event-bus.md, docs/workflow-builder.md,
+// docs/scheduling.md, docs/retries.md, docs/approvals.md,
+// docs/workflow-templates.md.
+
+enum WorkflowDefinitionStatus {
+  DRAFT
+  ACTIVE
+  DISABLED
+}
+
+enum WorkflowRunStatus {
+  PENDING
+  RUNNING
+  WAITING_APPROVAL
+  WAITING_TIMER
+  COMPLETED
+  FAILED
+  CANCELLED
+  ROLLED_BACK
+}
+
+enum WorkflowStepType {
+  READ_DATA
+  SEARCH_KNOWLEDGE
+  INVOKE_AGENT
+  INVOKE_TOOL
+  WAIT
+  BRANCH
+  DELAY
+  LOOP
+  NOTIFICATION
+  GENERATE_REPORT
+}
+
+enum WorkflowStepRunStatus {
+  PENDING
+  RUNNING
+  WAITING_APPROVAL
+  WAITING_TIMER
+  SUCCEEDED
+  FAILED
+  SKIPPED
+  ROLLED_BACK
+}
+
+/// Mirrors the spec's own Event Bus source list. Deliberately NOT the source
+/// of the free-form leaf event name — see `Event.eventType` below.
+enum EventSource {
+  DOCUMENT
+  PROJECT
+  TASK
+  MEETING
+  CUSTOMER
+  EMAIL
+  KNOWLEDGE_GRAPH
+  AI_COPILOT
+  AGENT
+  SYSTEM
+  /// Phase 9 — comments, mentions, spaces, shared-conversation events.
+  COLLABORATION
+}
+
+enum TriggerType {
+  ENTITY_CREATED
+  ENTITY_UPDATED
+  ENTITY_DELETED
+  FILE_UPLOADED
+  MANUAL
+  SCHEDULED
+  WEBHOOK
+  API
+  AGENT_EVENT
+  AI_INSIGHT
+}
+
+enum WorkflowScheduleStatus {
+  ACTIVE
+  PAUSED
+}
+
+/// Immutable once published — mirrors `Tool`/`Agent`'s `@@unique([key,
+/// version])` version-pinning pattern, scoped per-organization here since
+/// this is org-authored data, not a globally-registered developer artifact.
+/// A DRAFT row (unpublished, unreferenced by any real `WorkflowRun`) mutates
+/// in place — routine visual-builder edits shouldn't churn versions.
+/// Publishing freezes an ACTIVE, versioned, referenceable row so an
+/// in-flight `WorkflowRun` (possibly waiting days on a Delay step) always
+/// resumes against the exact graph it started with — the same reasoning
+/// `ExecutionPlan.planHash` is re-verified at execution time for.
+model WorkflowDefinition {
+  id             String                   @id @default(cuid())
+  organizationId String
+  workflowKey    String
+  version        String
+  name           String
+  description    String
+  status         WorkflowDefinitionStatus @default(DRAFT)
+  ownerId        String?
+  triggerType    TriggerType
+  /// `{type: TriggerType, config: {...}}` — e.g. cron/timezone for SCHEDULED,
+  /// an entity/source filter for ENTITY_UPDATED. `triggerType` above is a
+  /// denormalized, indexed copy of `trigger.type` for cheap filtering.
+  trigger        Json
+  /// A `WorkflowConditionNode` tree (AND/OR/NOT/comparison/date/predicate) —
+  /// null means "always match the trigger, no further filtering."
+  conditions     Json?
+  /// A flat DAG via `dependsOn`, the same shape `dag.ts` already operates on
+  /// for Phase 6 Plan Graphs — see `apps/web/features/workflows/lib/workflow-graph.ts`.
+  graph          Json
+  retryPolicy    Json?
+  timeoutMs      Int?
+  rollbackPolicy Json?
+  /// Set only when `triggerType = WEBHOOK`. Plaintext at rest, consistent
+  /// with this codebase's existing posture on integration secrets (e.g.
+  /// `Account.accessToken`/`refreshToken` are plain columns too) — no
+  /// field-level encryption utility exists anywhere in this codebase to
+  /// build against yet.
+  webhookSecret  String?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  organization      Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner              User?                     @relation("WorkflowDefinitionOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  runs               WorkflowRun[]
+  schedule           WorkflowSchedule?
+  webhookDeliveries  WorkflowWebhookDelivery[]
+
+  @@unique([organizationId, workflowKey, version])
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@map("workflow_definitions")
+}
+
+/// One row per trigger firing — pins `workflowDefinitionId` to the exact
+/// version active at trigger time (see the versioning note above).
+model WorkflowRun {
+  id                   String            @id @default(cuid())
+  organizationId       String
+  workflowDefinitionId String
+  triggerEventId       String?
+  status               WorkflowRunStatus @default(PENDING)
+  /// Propagates unchanged from the triggering Event through every step this
+  /// run produces — the tracing id for "everything that happened because of
+  /// this one trigger."
+  correlationId        String
+  /// The triggering Event's own causationId chain, used by the dispatch
+  /// budget's cycle guard (apps/web/features/workflows/lib/workflow-dispatch-budget.ts)
+  /// to refuse starting a second run of the SAME WorkflowDefinition within
+  /// one synchronous dispatch chain.
+  causationId          String?
+  error                String?
+  startedAt            DateTime          @default(now())
+  completedAt          DateTime?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflowDefinition WorkflowDefinition @relation(fields: [workflowDefinitionId], references: [id], onDelete: Restrict)
+  triggerEvent       Event?             @relation(fields: [triggerEventId], references: [id], onDelete: SetNull)
+  steps              WorkflowRunStep[]
+
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([workflowDefinitionId])
+  @@index([correlationId])
+  @@map("workflow_runs")
+}
+
+/// Mirrors `ExecutionStep`/`GoalStep`'s "own indexed table for the mutable,
+/// accumulating-over-time part" precedent — `WorkflowRun` stays a single
+/// mostly-static row, this table is the per-step runtime history.
+model WorkflowRunStep {
+  id          String                @id @default(cuid())
+  runId       String
+  key         String
+  stepType    WorkflowStepType
+  status      WorkflowStepRunStatus @default(PENDING)
+  input       Json
+  output      Json?
+  error       String?
+  attempt     Int                   @default(1)
+  /// Set only for a child step materialized by a LOOP step's nested
+  /// sub-graph iteration — see docs/workflow-builder.md.
+  loopIndex   Int?
+  /// Set only when status = WAITING_TIMER (Wait/Delay steps, and how the
+  /// tick endpoint finds resumable steps: `WHERE status = WAITING_TIMER AND
+  /// waitUntil <= now()`).
+  waitUntil   DateTime?
+  /// Soft reference to `ExecutionPlan.id` (not a hard FK, matching
+  /// `ExecutionStep.tool`'s own "resolved at runtime, re-validated against
+  /// the live source of truth" precedent) — set only for an INVOKE_TOOL step
+  /// once `proposeAction()` returns. `ApprovalRequest`/`ToolExecution` are
+  /// both already keyed 1:1 by planId, so this alone is enough to look up
+  /// the full approval/execution state.
+  planId      String?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime              @default(now())
+
+  run           WorkflowRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  toolExecution ToolExecution?
+
+  @@unique([runId, key])
+  @@index([status, waitUntil])
+  @@map("workflow_run_steps")
+}
+
+/// The Event Bus's append-only envelope — never edited or deleted, same
+/// convention as `AuditEvent`/`AgentTimelineEvent`. `eventType` is a
+/// free-form, dotted string (e.g. "task.completed", "document.uploaded",
+/// "workflow.notification") rather than a Prisma enum, since the event
+/// taxonomy is explicitly meant to grow additively over time (spec:
+/// "Extensible") — `source` is the bounded, indexed top-level category.
+model Event {
+  id             String      @id @default(cuid())
+  organizationId String
+  eventType      String
+  source         EventSource
+  payload        Json
+  correlationId  String
+  causationId    String?
+  metadata       Json?
+  /// Phase 9, additive: denormalized from `payload` at curated `publishEvent()`
+  /// call sites that concern one entity — existing rows are NULL, existing
+  /// queries unaffected. What lets the Activity Feed filter by
+  /// project/task/entity as a real indexed query instead of a payload-Json
+  /// scan. Loosely typed (no hard FK) — matches `entityType`/`entityId`'s own
+  /// established shape everywhere else it's used in this codebase
+  /// (`Embedding.sourceType`/`sourceId`, `Comment.entityType`/`entityId`).
+  entityType     String?
+  entityId       String?
+  createdAt      DateTime    @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflowRuns WorkflowRun[]
+
+  @@index([organizationId, eventType, createdAt])
+  @@index([correlationId])
+  @@index([organizationId, entityType, entityId, createdAt])
+  @@map("events")
+}
+
+/// Drives the tick endpoint (`POST /api/workflows/schedule/tick`) — one row
+/// per SCHEDULED-trigger WorkflowDefinition. `nextRunAt` is claimed
+/// atomically via a conditional `updateMany` (mirrors `ApprovalRequest`'s
+/// single-use-enforcement idiom) to prevent double-fire on overlapping tick
+/// invocations. Queried cross-organization by the tick handler — the one
+/// deliberate exception to this codebase's "every service function takes
+/// organizationId first" convention, kept in a repository function with no
+/// organizationId parameter, structurally separate from every other
+/// workflow repository function. See docs/scheduling.md.
+model WorkflowSchedule {
+  id                   String                 @id @default(cuid())
+  organizationId       String
+  workflowDefinitionId String                 @unique
+  cronExpression       String
+  timezone             String
+  nextRunAt            DateTime
+  lastRunAt            DateTime?
+  status               WorkflowScheduleStatus @default(ACTIVE)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflowDefinition WorkflowDefinition @relation(fields: [workflowDefinitionId], references: [id], onDelete: Cascade)
+
+  @@index([nextRunAt, status])
+  @@map("workflow_schedules")
+}
+
+/// Webhook replay protection — a dedicated table (not folded into `Event`)
+/// specifically because the uniqueness-as-enforcement idiom needs a real DB
+/// constraint, not a soft check, given "Replay protection" and "Unverified
+/// external webhooks" are explicit spec requirements. Mirrors
+/// `ApprovalRequest`'s atomic-conditional-update idiom, just via a unique
+/// constraint instead: a duplicate `idempotencyKey` for the same workflow
+/// fails the insert outright rather than being caught by application logic.
+model WorkflowWebhookDelivery {
+  id                   String   @id @default(cuid())
+  workflowDefinitionId String
+  idempotencyKey       String
+  receivedAt           DateTime @default(now())
+
+  workflowDefinition WorkflowDefinition @relation(fields: [workflowDefinitionId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowDefinitionId, idempotencyKey])
+  @@map("workflow_webhook_deliveries")
+}
+
+// ── Phase 9: Enterprise Collaboration ───────────────────────────────────────
+// Presence, shared editing, comments, mentions, notifications, an activity
+// feed, team spaces, shared AI conversations, and live dashboards — reused
+// on top of the P6 Approval Engine, P7 Agent Framework, and P8 Event Bus,
+// not parallel infrastructure. No WebSocket/CRDT infra: realtime is a
+// reconnecting SSE + Cache-backed poll primitive
+// (apps/web/features/collaboration/), and presence itself lives in `Cache`
+// (TTL-based), never a Postgres table — there is no model for it here on
+// purpose. See docs/collaboration.md, docs/presence.md, docs/comments.md,
+// docs/notifications.md, docs/activity-feed.md, docs/spaces.md,
+// docs/shared-ai.md.
+
+enum CommentableEntityType {
+  PROJECT
+  TASK
+  MEETING
+  DOCUMENT
+  CUSTOMER
+  GRAPH_NODE
+}
+
+enum MentionType {
+  USER
+  SPACE
+  AGENT
+}
+
+enum NotificationType {
+  MENTION
+  COMMENT
+  APPROVAL_REQUEST
+  WORKFLOW_EVENT
+  AGENT_INSIGHT
+  TASK_ASSIGNMENT
+  PROJECT_UPDATE
+  MEETING_REMINDER
+  SYSTEM
+}
+
+enum SharePermission {
+  READ
+  COLLABORATE
+}
+
+/// Universal comments (spec: attach to Projects/Tasks/Meetings/Documents/
+/// Customers/Graph nodes). `entityType`/`entityId` are loosely typed (no
+/// hard FK) — matches `Embedding.sourceType`/`sourceId`'s own established
+/// precedent for "one table spanning genuinely unrelated source tables
+/// can't use a normal Prisma relation," not `Attachment`'s (which FKs to a
+/// single target, `Entity`). `GRAPH_NODE` already covers `Entity` rows
+/// including `entityType = NOTE`. Deleting the target entity explicitly
+/// cleans up its comments via `deleteCommentsForEntity` (wired into every
+/// relevant delete service) — unlike `Embedding`'s own unaddressed orphan
+/// gap, comment threads are user-visible enough (reachable from a stale
+/// notification link) to need real cleanup. See docs/comments.md.
+model Comment {
+  id              String                @id @default(cuid())
+  organizationId  String
+  entityType      CommentableEntityType
+  entityId        String
+  authorId        String
+  parentCommentId String?
+  content         String
+  resolved        Boolean               @default(false)
+  resolvedById    String?
+  resolvedAt      DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  organization  Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  author        User                @relation("CommentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  resolvedBy    User?               @relation("CommentResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  parentComment Comment?            @relation("CommentReplies", fields: [parentCommentId], references: [id], onDelete: Cascade)
+  replies       Comment[]           @relation("CommentReplies")
+  attachments   CommentAttachment[]
+  mentions      Mention[]
+
+  @@index([organizationId])
+  @@index([organizationId, entityType, entityId])
+  @@index([parentCommentId])
+  @@map("comments")
+}
+
+model CommentAttachment {
+  id          String   @id @default(cuid())
+  commentId   String
+  fileName    String
+  mimeType    String
+  size        Int
+  storagePath String
+  createdAt   DateTime @default(now())
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@index([commentId])
+  @@map("comment_attachments")
+}
+
+/// Parsed from `Comment.content` at creation time (a plain `@handle` regex,
+/// not an NLP step) — a Mention is a structured record, never inferred
+/// later from unstructured text, the same discipline Phase 7 applied to
+/// agent-to-agent messages. `@team` resolves against `Space` membership
+/// (Spaces ARE this codebase's "team" concept for mentions — see model
+/// `Space`). `@agent` mentions are NOTIFICATION-ONLY; nothing here ever
+/// invokes an agent. See docs/comments.md.
+model Mention {
+  id                String      @id @default(cuid())
+  organizationId    String
+  commentId         String
+  mentionedType     MentionType
+  mentionedUserId   String?
+  mentionedSpaceId  String?
+  mentionedAgentKey String?
+  createdAt         DateTime    @default(now())
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  comment       Comment      @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  mentionedUser User?        @relation("MentionedUser", fields: [mentionedUserId], references: [id], onDelete: Cascade)
+  mentionedSpace Space?      @relation(fields: [mentionedSpaceId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([commentId])
+  @@index([mentionedUserId])
+  @@map("mentions")
+}
+
+/// The unified notification model — fanned out from `publishEvent()` (see
+/// `notification-fanout.service.ts`) plus direct creation for mentions.
+/// Read/unread, archive, and snooze are all plain columns on this one row,
+/// not separate tables — mirrors `ApprovalRequest`'s own "single mutable
+/// row, org-scoped updateMany for every state transition" shape. See
+/// docs/notifications.md.
+model Notification {
+  id             String           @id @default(cuid())
+  organizationId String
+  userId         String
+  type           NotificationType
+  title          String
+  body           String
+  entityType     String?
+  entityId       String?
+  sourceEventId  String?
+  read           Boolean          @default(false)
+  readAt         DateTime?
+  archived       Boolean          @default(false)
+  snoozedUntil   DateTime?
+  createdAt      DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([userId, read])
+  @@index([userId, archived])
+  @@index([userId, type])
+  @@map("notifications")
+}
+
+/// Team Spaces — curation and grouping, NOT a parallel ACL (see
+/// docs/spaces.md: "Spaces group and curate; they do not restrict who can
+/// see the underlying content"). `SpaceMember` is a plain roster, no
+/// space-specific role tier — a member's effective permission is always
+/// their ORGANIZATION role; space membership requires org membership
+/// ("permission inheritance from Organization") and is never itself
+/// checked as a content-visibility gate. The 4 link models curate a VIEW
+/// over existing org-owned entities via a soft `xxxId: String` reference
+/// (no hard FK — mirrors `ExecutionStep.tool`'s "resolved at runtime,
+/// re-validated by the service layer, not the database" precedent) — a
+/// Project stays organization-owned; linking it into a Space never moves
+/// ownership.
+model Space {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?                    @relation("SpaceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  members      SpaceMember[]
+  projects     SpaceProject[]
+  documents    SpaceKnowledgeDocument[]
+  workflows    SpaceWorkflow[]
+  agents       SpaceAgent[]
+  mentions     Mention[]
+
+  @@index([organizationId])
+  @@map("spaces")
+}
+
+model SpaceMember {
+  id       String   @id @default(cuid())
+  spaceId  String
+  userId   String
+  joinedAt DateTime @default(now())
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, userId])
+  @@index([userId])
+  @@map("space_members")
+}
+
+/// Soft reference to `Project.id` — see the module doc comment on `Space`.
+model SpaceProject {
+  id        String   @id @default(cuid())
+  spaceId   String
+  projectId String
+  createdAt DateTime @default(now())
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, projectId])
+  @@map("space_projects")
+}
+
+/// Soft reference to `KnowledgeDocument.id` — see the module doc comment on `Space`.
+model SpaceKnowledgeDocument {
+  id                  String   @id @default(cuid())
+  spaceId             String
+  knowledgeDocumentId String
+  createdAt           DateTime @default(now())
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, knowledgeDocumentId])
+  @@map("space_knowledge_documents")
+}
+
+/// Soft reference to `WorkflowDefinition.id` — see the module doc comment on `Space`.
+model SpaceWorkflow {
+  id                   String   @id @default(cuid())
+  spaceId              String
+  workflowDefinitionId String
+  createdAt            DateTime @default(now())
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, workflowDefinitionId])
+  @@map("space_workflows")
+}
+
+/// Soft reference to `Agent.agentKey` — see the module doc comment on `Space`.
+model SpaceAgent {
+  id        String   @id @default(cuid())
+  spaceId   String
+  agentKey  String
+  createdAt DateTime @default(now())
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, agentKey])
+  @@map("space_agents")
+}
+
+/// Introduces default-private `Conversation` access — a real, in-scope
+/// Phase 9 fix. Before this model existed, `Conversation` had NO ownership
+/// gate: any org member could already read/rename/delete any other
+/// member's conversation by id (`createdById` was stored but only ever used
+/// as an optional list filter, never an access check). Sharing is always
+/// to a specific org member, never public/cross-organization. See
+/// docs/shared-ai.md.
+model ConversationShare {
+  id               String          @id @default(cuid())
+  organizationId   String
+  conversationId   String
+  sharedWithUserId String
+  permission       SharePermission
+  sharedById       String?
+  createdAt        DateTime        @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sharedWith   User         @relation("ConversationShareRecipient", fields: [sharedWithUserId], references: [id], onDelete: Cascade)
+  sharedBy     User?        @relation("ConversationShareCreatedBy", fields: [sharedById], references: [id], onDelete: SetNull)
+
+  @@unique([conversationId, sharedWithUserId])
+  @@index([sharedWithUserId])
+  @@map("conversation_shares")
+}
+
+/// Shared Editing's version history — ONE polymorphic table (mirrors
+/// Event/AuditEvent's own "one table, not N duplicated ones" precedent),
+/// not a separate history table per Document/Project/Meeting/Entity. A
+/// snapshot is written BEFORE every versioned overwrite, so `version - 1`'s
+/// full prior state is always recoverable. No CRDT, no merge algorithm — a
+/// stale-version update throws `ConflictError`; the client shows both
+/// versions for the user to reconcile manually. See docs/collaboration.md.
+model EntityVersionSnapshot {
+  id             String   @id @default(cuid())
+  organizationId String
+  entityType     String
+  entityId       String
+  version        Int
+  snapshot       Json
+  editedById     String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  editedBy     User?        @relation("EntityVersionSnapshotEditedBy", fields: [editedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, entityType, entityId, version])
+  @@map("entity_version_snapshots")
+}
