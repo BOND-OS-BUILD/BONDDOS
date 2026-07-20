@@ -1,12 +1,13 @@
-# Notifications (Phase 9)
+# Notifications & Inbox (Phase 9)
 
 ## Scope
 
 `apps/web/features/notifications/services/notification-fanout.service.ts` — the one function,
 `notifyFromEvent()`, every Notification in this codebase is created through (mentions are the one
-partial exception — see below). This doc covers the `Notification` model, the corrected hook placement
-inside `publishEvent()`, the curated `eventType` → recipient mapping, and the two related Phase 9 fixes
-this step made to `ApprovalService`.
+partial exception — see below) — and `notification.service.ts`, the read/manage half (list, mark
+read, archive, snooze, and the Inbox's category summary). This doc covers the `Notification` model, the
+corrected hook placement inside `publishEvent()`, the curated `eventType` → recipient mapping, the two
+related Phase 9 fixes this step made to `ApprovalService`, and the Inbox's category system.
 
 ## The `Notification` model
 
@@ -93,6 +94,26 @@ transitively inside `event-bus.service.ts`'s own import chain today — `event-b
 `import { publishEvent } from '.../event-bus.service'` at the top of `approval.service.ts` would close
 that into a genuine circular module graph the moment it was added — the same class of cycle
 `task.service.ts` already avoids for the same reason (docs/event-bus.md).
+
+## Inbox: 6 categories, all just curated `NotificationType` groupings
+
+```ts
+const CATEGORY_TYPES: Record<NotificationCategory, NotificationType[]> = {
+  assigned: ['TASK_ASSIGNMENT'],
+  mentions: ['MENTION'],
+  approvals: ['APPROVAL_REQUEST'],
+  ai_insights: ['AGENT_INSIGHT'],
+  workflow_events: ['WORKFLOW_EVENT'],
+  activity: ['PROJECT_UPDATE', 'MEETING_REMINDER', 'COMMENT', 'SYSTEM'],
+};
+```
+
+The Inbox's 6 categories (Assigned/Mentions/Approvals/AI Insights/Workflow Events/Activity) are not a
+separate model or a `category` column — they're this one mapping in `notification.service.ts`, resolved
+into a `types: NotificationType[]` filter the existing repository already supports. `GET /api/inbox`
+returns the 6 categories' unread counts (each reusing `listNotificationsForUser`'s own `WHERE`-scoped
+`count()`, never a full row fetch) for the sidebar/tabs; `GET /api/notifications?category=<name>` returns
+the actual paginated feed for one category. Two routes, one underlying table, one mapping.
 
 ## What this does NOT do
 

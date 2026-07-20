@@ -1,3 +1,4 @@
+export * from './activity';
 export * from './agents';
 export * from './auth';
 export * from './bond';
@@ -14,6 +15,7 @@ export * from './graph';
 export * from './knowledge-document';
 export * from './meeting';
 export * from './member';
+export * from './notifications';
 export * from './organization';
 export * from './project';
 export * from './query';

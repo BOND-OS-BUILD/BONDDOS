@@ -1,8 +1,11 @@
 import { requireAuth } from '@bond-os/auth';
 import { collaborationStreamQuerySchema, ValidationError } from '@bond-os/shared';
 
+import { listActivityFeedService } from '@/features/activity/services/activity.service';
 import { channelStream } from '@/features/collaboration/lib/realtime-channel';
+import { getDashboardSnapshot } from '@/features/collaboration/services/dashboard.service';
 import { getPresenceSnapshot } from '@/features/collaboration/services/presence.service';
+import { getUnreadNotificationCountService, listNotificationsService } from '@/features/notifications/services/notification.service';
 import { apiHandler, parseQueryParams } from '@/lib/api-handler';
 import { requireActiveOrganizationId } from '@/lib/organization';
 import { createSseStream } from '@/lib/streaming-handler';
@@ -20,11 +23,11 @@ import { createSseStream } from '@/lib/streaming-handler';
 export const maxDuration = 30;
 
 export const GET = apiHandler(async (request) => {
-  await requireAuth();
+  const { user } = await requireAuth();
   const organizationId = await requireActiveOrganizationId();
   const query = parseQueryParams(request, collaborationStreamQuerySchema);
 
-  const { channelKey, fetchSnapshot } = resolveChannel(query, organizationId);
+  const { channelKey, fetchSnapshot } = resolveChannel(query, organizationId, user.id);
 
   const generator = channelStream(channelKey, fetchSnapshot);
   // Primed here, inside apiHandler's try/catch, so a validation error still
@@ -40,6 +43,7 @@ export const GET = apiHandler(async (request) => {
 function resolveChannel(
   query: { type: string; page?: string },
   organizationId: string,
+  userId: string,
 ): { channelKey: string; fetchSnapshot: () => Promise<unknown> } {
   switch (query.type) {
     case 'presence': {
@@ -48,6 +52,27 @@ function resolveChannel(
       return {
         channelKey: `presence:org:${organizationId}:page:${page}`,
         fetchSnapshot: () => getPresenceSnapshot(organizationId, page),
+      };
+    }
+    case 'notifications': {
+      return {
+        channelKey: `notifications:user:${userId}`,
+        fetchSnapshot: async () => ({
+          unreadCount: await getUnreadNotificationCountService(organizationId, userId),
+          latest: (await listNotificationsService(organizationId, userId, { page: 1, pageSize: 10 })).items,
+        }),
+      };
+    }
+    case 'activity': {
+      return {
+        channelKey: `activity:org:${organizationId}`,
+        fetchSnapshot: async () => (await listActivityFeedService(organizationId, { page: 1, pageSize: 30 })).items,
+      };
+    }
+    case 'dashboard': {
+      return {
+        channelKey: `dashboard:org:${organizationId}`,
+        fetchSnapshot: () => getDashboardSnapshot(organizationId, userId),
       };
     }
     default:

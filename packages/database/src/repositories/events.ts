@@ -48,15 +48,19 @@ export interface ListEventsFilters {
   /** Phase 9 Activity Feed filter — both must be provided together (an entity is identified by the pair, not `entityId` alone). */
   entityType?: string;
   entityId?: string;
+  /** Phase 9 Activity Feed date-range filter, both inclusive. */
+  since?: Date;
+  until?: Date;
 }
 
 export async function listEvents(filters: ListEventsFilters): Promise<PaginatedResult<EventData>> {
-  const { organizationId, page, pageSize, eventType, source, entityType, entityId } = filters;
+  const { organizationId, page, pageSize, eventType, source, entityType, entityId, since, until } = filters;
   const where = {
     organizationId,
     ...(eventType && { eventType }),
     ...(source && { source }),
     ...(entityType && entityId && { entityType, entityId }),
+    ...((since || until) && { createdAt: { ...(since && { gte: since }), ...(until && { lte: until }) } }),
   };
 
   const [items, total] = await Promise.all([

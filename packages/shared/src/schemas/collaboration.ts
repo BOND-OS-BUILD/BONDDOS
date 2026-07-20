@@ -21,10 +21,9 @@ export type PresenceHeartbeatInput = z.infer<typeof presenceHeartbeatSchema>;
  * minimal scoping params that type needs (e.g. `page` for presence). The
  * route builds the real Cache key server-side from the caller's own
  * `organizationId`/`userId`, so a channel key can never be used to read
- * another org's or another user's data. This enum grows as later steps
- * wire up more channel types (notifications/activity/comments/dashboard).
+ * another org's or another user's data.
  */
-export const collaborationStreamTypeSchema = z.enum(['presence']);
+export const collaborationStreamTypeSchema = z.enum(['presence', 'notifications', 'activity', 'dashboard']);
 export type CollaborationStreamType = z.infer<typeof collaborationStreamTypeSchema>;
 
 export const collaborationStreamQuerySchema = z.object({

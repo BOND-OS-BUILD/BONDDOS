@@ -3,10 +3,10 @@
 ## Scope
 
 `apps/web/features/collaboration/lib/realtime-channel.ts` — the one generic primitive every realtime
-surface in Phase 9 is built on: Presence (docs/presence.md), and, as later steps land, Notifications,
-the Activity Feed, Live Dashboards, and live comment-thread updates. This doc covers why it's SSE and
-not WebSockets, how the reconnecting-poll loop works, how per-channel snapshot caching avoids a query
-storm, and the deployment prerequisite this all rests on.
+surface in Phase 9 is built on: Presence (docs/presence.md), Notifications (docs/notifications.md), the
+Activity Feed (docs/activity-feed.md), and Live Dashboards (below). This doc covers why it's SSE and not
+WebSockets, how the reconnecting-poll loop works, how per-channel snapshot caching avoids a query storm,
+and the deployment prerequisite this all rests on.
 
 ## Why SSE, not WebSockets
 
@@ -48,6 +48,32 @@ key from the caller's own authenticated `organizationId` (and, for per-user chan
 `userId`) — never from client-supplied values. This is what makes a channel key unable to be steered
 into reading another organization's or another user's data; see the write-boundary/authorization
 coverage in the Phase 9 security review for the enforcement proof.
+
+| `type` | Channel key | Snapshot |
+|---|---|---|
+| `presence` | `presence:org:<id>:page:<page>` | Current viewers of one page (docs/presence.md) |
+| `notifications` | `notifications:user:<id>` | The caller's own unread count + latest 10 (docs/notifications.md) |
+| `activity` | `activity:org:<id>` | Latest 30 org-wide Activity Feed events (docs/activity-feed.md) |
+| `dashboard` | `dashboard:org:<id>` | Pending approvals / active workflow runs / unread notifications (below) |
+
+## Live Dashboards: the `dashboard` channel
+
+```ts
+export interface DashboardSnapshot {
+  pendingApprovals: number;
+  activeWorkflowRuns: number;
+  unreadNotifications: number;
+}
+```
+
+`apps/web/features/collaboration/services/dashboard.service.ts` builds this snapshot entirely from
+existing Phase 6/7/8 queries — `listExecutionsService(..., { status: 'AWAITING_APPROVAL' })` (the exact
+call `/workflows/approvals` already makes), `listWorkflowRuns` summed across the four non-terminal
+`WorkflowRunStatus` values, and the notification unread count. No new aggregation infrastructure, per the
+spec's own framing for this feature. This covers 3 of the spec's 6 listed dashboard signals (pending
+approvals, workflow status, notifications) — agent activity, project health, and active-user counts are
+not included in this snapshot; the `dashboard` channel's shape can grow additively if those are needed
+later, the same way `entityType`/`entityId` were added to `Event` without touching existing callers.
 
 ## Per-channel snapshot caching via `Cache`, not a new table
 
