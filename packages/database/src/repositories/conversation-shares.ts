@@ -1,3 +1,5 @@
+import type { PaginatedResult } from '@bond-os/shared';
+
 import { prisma } from '../client';
 import type { Prisma, SharePermission } from '../generated/index.js';
 import { toUserSummaryOrNull, userSummarySelect, type UserSummary } from './shared';
@@ -84,4 +86,59 @@ export async function getConversationShareForUser(conversationId: string, shared
 export async function removeConversationShare(conversationId: string, organizationId: string, sharedWithUserId: string): Promise<boolean> {
   const result = await prisma.conversationShare.deleteMany({ where: { conversationId, organizationId, sharedWithUserId } });
   return result.count > 0;
+}
+
+export interface SharedConversationSummary {
+  share: ConversationShareData;
+  conversation: { id: string; title: string | null; createdBy: UserSummary | null; updatedAt: Date };
+}
+
+const sharedWithMeInclude = {
+  ...shareInclude,
+  conversation: {
+    select: { id: true, title: true, updatedAt: true, createdBy: { select: userSummarySelect } },
+  },
+} satisfies Prisma.ConversationShareInclude;
+
+type ShareWithConversation = Prisma.ConversationShareGetPayload<{ include: typeof sharedWithMeInclude }>;
+
+function toSharedConversationSummary(share: ShareWithConversation): SharedConversationSummary {
+  return {
+    share: toItem(share),
+    conversation: {
+      id: share.conversation.id,
+      title: share.conversation.title,
+      createdBy: toUserSummaryOrNull(share.conversation.createdBy),
+      updatedAt: share.conversation.updatedAt,
+    },
+  };
+}
+
+/** "Shared Conversations" (Phase 9 Shared AI Sessions UI) — every conversation shared WITH this user, across the organization, most recently shared first. */
+export async function listConversationsSharedWithUser(
+  organizationId: string,
+  userId: string,
+  page: number,
+  pageSize: number,
+): Promise<PaginatedResult<SharedConversationSummary>> {
+  const where: Prisma.ConversationShareWhereInput = { organizationId, sharedWithUserId: userId };
+
+  const [items, total] = await Promise.all([
+    prisma.conversationShare.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      include: sharedWithMeInclude,
+    }),
+    prisma.conversationShare.count({ where }),
+  ]);
+
+  return {
+    items: items.map(toSharedConversationSummary),
+    page,
+    pageSize,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  };
 }

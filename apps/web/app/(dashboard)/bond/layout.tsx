@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { Users } from 'lucide-react';
 
 import { requireAuth } from '@bond-os/auth';
 import { ROUTES } from '@bond-os/shared';
@@ -40,6 +42,13 @@ export default async function BondLayout({ children }: { children: ReactNode }) 
         <div className="flex-1 overflow-y-auto">
           <ConversationList conversations={conversations.items} />
         </div>
+        <Link
+          href={ROUTES.sharedConversations}
+          className="flex items-center gap-2 border-t border-border px-4 py-3 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <Users className="h-4 w-4" />
+          Shared with me
+        </Link>
       </aside>
       <div className="min-w-0 flex-1">{children}</div>
     </div>

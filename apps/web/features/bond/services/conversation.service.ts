@@ -7,6 +7,7 @@ import {
   getConversationById,
   getConversationShareForUser,
   listConversations,
+  listConversationsSharedWithUser,
   listSharesForConversation,
   removeConversationShare as removeConversationShareRow,
   transferConversationOwnership,
@@ -14,6 +15,7 @@ import {
   upsertConversationShare,
   type ConversationListItem,
   type ConversationShareData,
+  type SharedConversationSummary,
 } from '@bond-os/database';
 import {
   ForbiddenError,
@@ -193,4 +195,14 @@ export async function transferConversationOwnershipService(organizationId: strin
   const transferred = await transferConversationOwnership(conversationId, organizationId, newOwnerId);
   if (!transferred) throw new NotFoundError('Conversation not found.');
   return getConversationService(organizationId, conversationId);
+}
+
+export async function listConversationsSharedWithMeService(
+  organizationId: string,
+  userId: string,
+  page: number,
+  pageSize: number,
+): Promise<PaginatedResult<SharedConversationSummary>> {
+  await requireRole(organizationId, ROLES.MEMBER);
+  return listConversationsSharedWithUser(organizationId, userId, page, pageSize);
 }

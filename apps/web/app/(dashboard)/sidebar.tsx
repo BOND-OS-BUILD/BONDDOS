@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  Activity,
   Bot,
   Brain,
   Building2,
@@ -10,8 +11,11 @@ import {
   Contact,
   FileText,
   FolderKanban,
+  Gauge,
   History,
+  Inbox,
   LayoutDashboard,
+  LayoutGrid,
   Library,
   ListTodo,
   type LucideIcon,
@@ -42,6 +46,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { href: ROUTES.dashboard, label: 'Dashboard', icon: LayoutDashboard },
+  { href: ROUTES.inbox, label: 'Inbox', icon: Inbox },
   { href: ROUTES.search, label: 'Search', icon: Search },
   { href: ROUTES.memory, label: 'Memory', icon: Brain },
   { href: ROUTES.company, label: 'Company', icon: Building2 },
@@ -59,6 +64,9 @@ const NAV_ITEMS: NavItem[] = [
   { href: ROUTES.agents, label: 'Agents', icon: UsersRound },
   { href: ROUTES.workflows, label: 'Workflows', icon: Workflow },
   { href: ROUTES.executionHistory, label: 'Execution History', icon: History },
+  { href: ROUTES.spaces, label: 'Spaces', icon: LayoutGrid },
+  { href: ROUTES.activity, label: 'Activity', icon: Activity },
+  { href: ROUTES.teamDashboard, label: 'Team Dashboard', icon: Gauge },
   { href: ROUTES.people, label: 'People', icon: Users },
   { href: ROUTES.integrations, label: 'Integrations', icon: Plug },
   { href: ROUTES.settings, label: 'Settings', icon: Settings },
@@ -72,7 +80,8 @@ function isNavItemActive(pathname: string, href: string): boolean {
     href === ROUTES.ai ||
     href === ROUTES.bond ||
     href === ROUTES.agents ||
-    href === ROUTES.workflows
+    href === ROUTES.workflows ||
+    href === ROUTES.spaces
   ) {
     return pathname.startsWith(href);
   }
