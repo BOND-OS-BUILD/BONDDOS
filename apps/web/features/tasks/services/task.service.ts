@@ -2,6 +2,7 @@ import { requireRole } from '@bond-os/auth';
 import {
   areAllUsersInOrganization,
   createTask as createTaskRow,
+  deleteCommentsForEntity,
   deleteTask as deleteTaskRow,
   getTaskById,
   listTasks,
@@ -113,4 +114,5 @@ export async function deleteTaskService(organizationId: string, id: string): Pro
   await requireRole(organizationId, ROLES.ADMIN);
   const deleted = await deleteTaskRow(id, organizationId);
   if (!deleted) throw new NotFoundError('Task not found.');
+  await deleteCommentsForEntity(organizationId, 'TASK', id);
 }

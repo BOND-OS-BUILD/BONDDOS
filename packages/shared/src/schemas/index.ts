@@ -2,6 +2,7 @@ export * from './agents';
 export * from './auth';
 export * from './bond';
 export * from './collaboration';
+export * from './comments';
 export * from './connector';
 export * from './contact';
 export * from './customer';

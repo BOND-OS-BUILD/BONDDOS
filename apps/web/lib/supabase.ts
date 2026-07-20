@@ -31,10 +31,11 @@ export interface UploadResult {
  * Uploads a file to the shared public bucket under `folder/filename` and
  * returns its public URL. Used for avatar (`folder: "avatars"`), organization
  * logo (`folder: "logos"`), Knowledge Graph document (`folder: "documents"`),
- * and Phase 2 Library (`folder: "knowledge"`) uploads.
+ * Phase 2 Library (`folder: "knowledge"`), and Phase 9 comment attachment
+ * (`folder: "comments"`) uploads.
  */
 export async function uploadPublicFile(
-  folder: 'avatars' | 'logos' | 'documents' | 'knowledge',
+  folder: 'avatars' | 'logos' | 'documents' | 'knowledge' | 'comments',
   filename: string,
   file: Blob,
 ): Promise<UploadResult> {

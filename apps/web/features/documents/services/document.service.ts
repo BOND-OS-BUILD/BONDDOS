@@ -1,6 +1,7 @@
 import { requireRole } from '@bond-os/auth';
 import {
   createDocument as createDocumentRow,
+  deleteCommentsForEntity,
   deleteDocument as deleteDocumentRow,
   getDocumentById,
   listDocuments,
@@ -115,4 +116,5 @@ export async function deleteDocumentService(organizationId: string, id: string):
   await requireRole(organizationId, ROLES.ADMIN);
   const deleted = await deleteDocumentRow(id, organizationId);
   if (!deleted) throw new NotFoundError('Document not found.');
+  await deleteCommentsForEntity(organizationId, 'DOCUMENT', id);
 }

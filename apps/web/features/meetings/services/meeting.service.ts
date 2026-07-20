@@ -2,6 +2,7 @@ import { requireRole } from '@bond-os/auth';
 import {
   areAllUsersInOrganization,
   createMeeting as createMeetingRow,
+  deleteCommentsForEntity,
   deleteMeeting as deleteMeetingRow,
   getMeetingById,
   listMeetings,
@@ -107,4 +108,5 @@ export async function deleteMeetingService(organizationId: string, id: string): 
   await requireRole(organizationId, ROLES.ADMIN);
   const deleted = await deleteMeetingRow(id, organizationId);
   if (!deleted) throw new NotFoundError('Meeting not found.');
+  await deleteCommentsForEntity(organizationId, 'MEETING', id);
 }

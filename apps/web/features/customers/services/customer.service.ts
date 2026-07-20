@@ -1,6 +1,7 @@
 import { requireRole } from '@bond-os/auth';
 import {
   createCustomer as createCustomerRow,
+  deleteCommentsForEntity,
   deleteCustomer as deleteCustomerRow,
   getCustomerById,
   listCustomers,
@@ -90,4 +91,5 @@ export async function deleteCustomerService(organizationId: string, id: string):
   await requireRole(organizationId, ROLES.ADMIN);
   const deleted = await deleteCustomerRow(id, organizationId);
   if (!deleted) throw new NotFoundError('Customer not found.');
+  await deleteCommentsForEntity(organizationId, 'CUSTOMER', id);
 }
