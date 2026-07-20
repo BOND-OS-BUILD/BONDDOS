@@ -18,6 +18,7 @@ export * from './organization';
 export * from './project';
 export * from './query';
 export * from './retrieval';
+export * from './spaces';
 export * from './sync-job';
 export * from './tag';
 export * from './task';
