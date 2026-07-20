@@ -1,8 +1,11 @@
+import { requireAuth } from '@bond-os/auth';
 import { getOrganizationMembers } from '@bond-os/database';
 import { Avatar, AvatarFallback, Badge, Card, CardContent, CardHeader, CardTitle, Separator } from '@bond-os/ui';
 import { CalendarDays, FileText, Users, Video } from 'lucide-react';
 import Link from 'next/link';
 
+import { CommentThread } from '@/features/comments/components/comment-thread';
+import { PresenceBar } from '@/features/collaboration/components/presence-bar';
 import { PriorityBadge } from '@/features/shared/components/priority-badge';
 import { ProjectDeleteButton } from '@/features/projects/components/project-delete-button';
 import { ProjectFormDialog } from '@/features/projects/components/project-form-dialog';
@@ -27,6 +30,7 @@ const TASK_STATUS_LABEL: Record<string, string> = {
 
 export default async function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const { user } = await requireAuth();
   const organizationId = await requireActiveOrganizationId();
   const [project, members] = await Promise.all([
     getProjectService(organizationId, id),
@@ -44,7 +48,8 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           </div>
           {project.description ? <p className="max-w-2xl text-sm text-muted-foreground">{project.description}</p> : null}
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 items-center gap-3">
+          <PresenceBar page={`project:${project.id}`} currentUserId={user.id} />
           <ProjectFormDialog project={project} members={members} trigger={<button className="text-sm font-medium underline underline-offset-4">Edit</button>} />
           <ProjectDeleteButton id={project.id} title={project.title} />
         </div>
@@ -168,6 +173,10 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           </CardContent>
         </Card>
       </div>
+
+      <Separator />
+
+      <CommentThread organizationId={organizationId} entityType="PROJECT" entityId={project.id} currentUserId={user.id} />
     </div>
   );
 }

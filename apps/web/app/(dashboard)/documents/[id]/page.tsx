@@ -1,7 +1,10 @@
+import { requireAuth } from '@bond-os/auth';
 import { Badge, Card, CardContent, CardHeader, CardTitle, Separator } from '@bond-os/ui';
 import { FolderKanban, ListChecks, Video } from 'lucide-react';
 import Link from 'next/link';
 
+import { CommentThread } from '@/features/comments/components/comment-thread';
+import { PresenceBar } from '@/features/collaboration/components/presence-bar';
 import { DocumentDeleteButton } from '@/features/documents/components/document-delete-button';
 import { DocumentEditDialog } from '@/features/documents/components/document-edit-dialog';
 import { getDocumentService } from '@/features/documents/services/document.service';
@@ -31,6 +34,7 @@ function formatBytes(bytes: number): string {
 
 export default async function DocumentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const { user } = await requireAuth();
   const organizationId = await requireActiveOrganizationId();
   const [document, projectsResult, meetingsResult] = await Promise.all([
     getDocumentService(organizationId, id),
@@ -50,7 +54,8 @@ export default async function DocumentDetailPage({ params }: { params: Promise<{
             <p className="max-w-2xl text-sm text-muted-foreground">{document.description}</p>
           ) : null}
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 items-center gap-3">
+          <PresenceBar page={`document:${document.id}`} currentUserId={user.id} />
           <DocumentEditDialog
             document={document}
             projects={projectsResult.items}
@@ -140,6 +145,10 @@ export default async function DocumentDetailPage({ params }: { params: Promise<{
           </CardContent>
         </Card>
       </div>
+
+      <Separator />
+
+      <CommentThread organizationId={organizationId} entityType="DOCUMENT" entityId={document.id} currentUserId={user.id} />
     </div>
   );
 }

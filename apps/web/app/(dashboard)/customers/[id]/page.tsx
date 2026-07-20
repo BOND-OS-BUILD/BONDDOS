@@ -1,7 +1,10 @@
+import { requireAuth } from '@bond-os/auth';
 import { Badge, Card, CardContent, CardHeader, CardTitle, Separator } from '@bond-os/ui';
 import { FolderKanban, Mail, Plus } from 'lucide-react';
 import Link from 'next/link';
 
+import { CommentThread } from '@/features/comments/components/comment-thread';
+import { PresenceBar } from '@/features/collaboration/components/presence-bar';
 import { CustomerDeleteButton } from '@/features/customers/components/customer-delete-button';
 import { CustomerEmailDialog } from '@/features/customers/components/customer-email-dialog';
 import { CustomerFormDialog } from '@/features/customers/components/customer-form-dialog';
@@ -35,6 +38,7 @@ const DIRECTION_VARIANT: Record<string, 'outline' | 'secondary'> = {
 
 export default async function CustomerDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const { user } = await requireAuth();
   const organizationId = await requireActiveOrganizationId();
   const [customer, projectsResult] = await Promise.all([
     getCustomerService(organizationId, id),
@@ -54,7 +58,8 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
           </div>
           {customer.company ? <p className="text-sm text-muted-foreground">{customer.company}</p> : null}
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 items-center gap-3">
+          <PresenceBar page={`customer:${customer.id}`} currentUserId={user.id} />
           <CustomerFormDialog
             customer={customer}
             projects={projects}
@@ -160,6 +165,10 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
           </CardContent>
         </Card>
       </div>
+
+      <Separator />
+
+      <CommentThread organizationId={organizationId} entityType="CUSTOMER" entityId={customer.id} currentUserId={user.id} />
     </div>
   );
 }

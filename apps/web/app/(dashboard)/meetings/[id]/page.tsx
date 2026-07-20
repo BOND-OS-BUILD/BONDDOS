@@ -1,8 +1,11 @@
+import { requireAuth } from '@bond-os/auth';
 import { getOrganizationMembers } from '@bond-os/database';
 import { Avatar, AvatarFallback, Badge, Card, CardContent, CardHeader, CardTitle, Separator } from '@bond-os/ui';
 import { FileText, Users } from 'lucide-react';
 import Link from 'next/link';
 
+import { CommentThread } from '@/features/comments/components/comment-thread';
+import { PresenceBar } from '@/features/collaboration/components/presence-bar';
 import { MeetingDeleteButton } from '@/features/meetings/components/meeting-delete-button';
 import { MeetingFormDialog } from '@/features/meetings/components/meeting-form-dialog';
 import { getMeetingService } from '@/features/meetings/services/meeting.service';
@@ -26,6 +29,7 @@ function formatDuration(minutes: number | null): string {
 
 export default async function MeetingDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const { user } = await requireAuth();
   const organizationId = await requireActiveOrganizationId();
   const [meeting, projectsResult, members] = await Promise.all([
     getMeetingService(organizationId, id),
@@ -48,7 +52,8 @@ export default async function MeetingDetailPage({ params }: { params: Promise<{ 
             {meeting.project.title}
           </Link>
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 items-center gap-3">
+          <PresenceBar page={`meeting:${meeting.id}`} currentUserId={user.id} />
           <MeetingFormDialog
             meeting={meeting}
             projects={projects}
@@ -122,6 +127,10 @@ export default async function MeetingDetailPage({ params }: { params: Promise<{ 
           </CardContent>
         </Card>
       </div>
+
+      <Separator />
+
+      <CommentThread organizationId={organizationId} entityType="MEETING" entityId={meeting.id} currentUserId={user.id} />
     </div>
   );
 }
