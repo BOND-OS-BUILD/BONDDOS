@@ -278,7 +278,7 @@ floor, using `roleSatisfies` directly for an ad hoc comparison rather than a sec
   `assertCanManageSpace(callerId, callerRole, space)` is used for rename/delete/link-unlink-content/
   remove-other-member: `ForbiddenError` unless `space.createdBy?.id === callerId` **or**
   `roleSatisfies(callerRole, ROLES.ADMIN)`. Notably, mere Space *membership* is never itself checked as
-  a gate anywhere in this file — see [Permissions § Spaces](./permissions.md#team-spaces) and
+  a gate anywhere in this file — see [Permissions § Spaces](./permissions.md#13-collaboration--comments-mentions-notifications-activity-presence-team-spaces) and
   [Organization Isolation](./organization-isolation.md) for why Spaces are curation, not an ACL.
 - **Organization membership escalation guards** — not "ownership" in the resource sense, but the same
   family of "role alone isn't enough" logic: `POST /api/organization/[id]/members` and
@@ -287,7 +287,7 @@ floor, using `roleSatisfies` directly for an ad hoc comparison rather than a sec
   (`organization/[id]/members/route.ts:49-51`, `organization/[id]/members/[userId]/route.ts:56-59,86-88`),
   and that an organization can never be left with zero `OWNER`s
   (`assertNotLastOwner`, `organization/[id]/members/[userId]/route.ts:30-38`). See
-  [Permissions § Organization & Membership](./permissions.md#organization--membership) for the full
+  [Permissions § Organization & Membership](./permissions.md#1-organization--membership) for the full
   breakdown.
 
 In every one of these cases, the resource-level check runs **after** the `requireRole` floor, never
@@ -339,7 +339,7 @@ Execution Framework's approval gate is the one place in the codebase where the *
   plus the caller's live role) — the actual per-plan gate is the `roleSatisfies` call inside
   `approve()`.
 
-This is the mechanism [Permissions](./permissions.md#execution--approvals) refers to when it says
+This is the mechanism [Permissions](./permissions.md#11-execution--approvals) refers to when it says
 Execution/Approval permissions can't be reduced to a single static row in the matrix. Full design
 rationale (why a signature token was considered and rejected, single-use/replay protection via
 `transitionApprovalRequest`'s atomic `updateMany`, `planHash` re-verification) lives in
@@ -371,7 +371,7 @@ handler having to build the response itself.
 - **No permission delegation** ("let X approve on my behalf," temporary role grants, time-boxed access).
 - **Team Space membership is not an authorization boundary** — see
   [Organization Isolation](./organization-isolation.md) and
-  [Permissions § Team Spaces](./permissions.md#team-spaces). Linking content into a Space never
+  [Permissions § Team Spaces](./permissions.md#13-collaboration--comments-mentions-notifications-activity-presence-team-spaces). Linking content into a Space never
   restricts who can see that content; it only curates.
 - **No row-level security (RLS) at the Postgres level.** Every isolation and authorization guarantee
   described in this document and [Organization Isolation](./organization-isolation.md) is enforced

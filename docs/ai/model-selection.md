@@ -234,7 +234,7 @@ const completionTokens = countTokensService(finalContent);
 const tokenUsage = { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
 ```
 
-This uses the same `cl100k_base` tokenizer described in [Providers](./providers.md#basaiprovider--shared-token-counting) —
+This uses the same `cl100k_base` tokenizer described in [Providers](./providers.md#baseaiprovider--shared-token-counting) —
 an approximation, consistent across providers, but never a provider's own reported figure for the
 turn that actually gets persisted and shown to the user. Planning turns' real `usage` (from
 `generate()`) is computed by the provider but never read or aggregated by either pipeline.

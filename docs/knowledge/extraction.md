@@ -172,7 +172,7 @@ async function createRelationshipAndTrackTimeline(
 
 This is the single choke point that guarantees `CONNECTED` timeline events are appended to **both**
 endpoints of a relationship, and only when the relationship was actually newly created — never on a
-duplicate no-op. See [timeline.md](timeline.md#connected).
+duplicate no-op. See [timeline.md](timeline.md#what-actually-writes-each-event-type).
 
 ## What's deliberately not built
 

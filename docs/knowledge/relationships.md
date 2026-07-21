@@ -134,7 +134,7 @@ This means the extraction pipeline re-processing a re-uploaded or duplicate docu
 duplicate edges — and, because `createRelationshipAndTrackTimeline`
 (`extraction-pipeline.service.ts`) only appends `CONNECTED` timeline events when `created` is
 truthy, a no-op relationship creation never produces a duplicate timeline event either. See
-[timeline.md](timeline.md#connected).
+[timeline.md](timeline.md#what-actually-writes-each-event-type).
 
 ## Manual creation and permissions
 

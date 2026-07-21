@@ -154,7 +154,7 @@ prefixes, parsed the same way `<<TOOL:...>>` is:
 - `<<ACTION:tool_key>>{...}` / `<<ACTION:plan>>{...}` — the write-proposal marker
   (`apps/web/features/planner/services/intent-detection.service.ts`'s `ACTION_MARKER` regex), which
   lets a model propose a create/update/archive action pending human approval. See
-  [Approvals](../security/approvals.md) and [RAG Pipeline](./rag.md#the-toolactiondelegate-loop).
+  [Approvals](../security/approvals.md) and [RAG Pipeline](./rag.md#6-the-toolactiondelegate-loop).
 - `<<DELEGATE:agent_key>>{...}` — the multi-agent consult/handoff marker
   (`apps/web/features/agents/services/agent-pipeline.service.ts`'s `DELEGATE_MARKER` regex). See
   [Delegation](../agents/delegation.md).

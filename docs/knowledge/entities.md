@@ -49,7 +49,7 @@ model Entity {
   `{ linkedRecordType: 'PROJECT' | 'MEETING', linkedRecordId }`, written by
   `mergeEntityMetadata` (`packages/database/src/repositories/graph-nodes.ts`) when an extracted
   mention's title exactly matches a real Phase 1 `Project`/`Meeting`. See
-  [extraction.md](extraction.md#soft-linking-to-phase-1-records).
+  [extraction.md](extraction.md#the-pipeline-step-by-step).
 - **`version` (`Int`, default `1`)** — a Phase 9, additive-only field for optimistic-concurrency /
   version tracking. Its own schema comment says it's "in practice only exercised for `entityType =
   NOTE` rows today (the only `Entity` content this codebase lets a user directly edit)." A related

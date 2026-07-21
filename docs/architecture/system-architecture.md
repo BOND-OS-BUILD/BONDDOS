@@ -165,7 +165,7 @@ integration verified in code — nothing here is aspirational. AI/embedding prov
 API key env var is set; Supabase Storage and SMTP activate when their own env vars are set; Redis is
 optional. The seven connector providers (Gmail, Slack, GitHub, Google Calendar, Google Drive, Notion,
 OneDrive) are deliberately **excluded** from this diagram — every one of them is a stub whose
-`connect()`/`sync()` throws `ConnectorNotImplementedError`; see [folder-structure.md](./folder-structure.md#connectors)
+`connect()`/`sync()` throws `ConnectorNotImplementedError`; see [folder-structure.md](./folder-structure.md#connectors-p2-scaffold-still-architecture-only)
 and `docs/connectors.md`.
 
 ```mermaid
