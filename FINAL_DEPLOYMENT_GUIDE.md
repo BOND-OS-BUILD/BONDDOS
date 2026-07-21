@@ -25,9 +25,38 @@ For deeper technical detail behind any step, see [`docs/deployment/production.md
 | Vercel ↔ GitHub integration | **Connected.** `productionBranch: "main"` — pushing to `main` now triggers an automatic production deployment; PRs trigger preview deployments. |
 | Root Directory | `apps/web` (correct — verified) |
 | Framework Preset | Next.js (auto-detected) |
-| Build | ✅ Succeeds on Vercel's infrastructure — all 123 routes compile, Prisma Client and its Linux query-engine binary are correctly generated and bundled (see the 3 fixes in commit `2679a44`) |
-| Environment variables on Vercel | **0 set** — none fabricated, per instruction |
+| Build (with any env vars present, even non-functional placeholders) | ✅ Succeeds — all 123 routes compile, Prisma Client and its Linux query-engine binary are correctly generated and bundled (see the 3 fixes in commit `2679a44`) |
+| Build (with **zero** env vars present) | ❌ Fails during static generation of pages that call a service at build time — see §1.1, fixed at the "page data collection" layer but not (and doesn't need to be) at the "zero env vars anywhere" layer |
+| Environment variables on Vercel | **0 set** — none fabricated, per instruction. **This must change before the next deploy succeeds — see §1.1.** |
 | Production database | **Does not exist yet** |
+
+### 1.1 A real bug found and fixed while connecting GitHub: the build shouldn't need live secrets, and mostly no longer does
+
+Connecting Vercel's GitHub integration (§4) triggered this repository's first-ever build **from a
+clean GitHub clone with zero environment variables set** — every earlier successful build (documented
+in the previous session) had, without anyone intending it, inherited a locally-present `.env` file's
+values through the deploy path. That clean build failed, and investigating it found a real,
+worth-fixing issue: `packages/shared/src/logger.ts` (imported by nearly every module in this codebase)
+called the zod-validated `getEnv()` at **module scope**, just to read `NODE_ENV` — which forced full
+environment validation (`DATABASE_URL`, `BETTER_AUTH_SECRET`, ...) the moment *any* route module was
+merely imported, including during Next.js's build-time "Collecting page data" step. A second, related
+issue: `packages/auth/src/server.ts` constructed the Better Auth instance eagerly at module scope too.
+
+**Fixed** (commit after `2679a44`, see `git log`): both are now lazily constructed, matching the
+lazy-singleton composition-root pattern already used everywhere else in this codebase. The build no
+longer requires *any* environment variable to complete "Collecting page data" — verified directly by
+running a clean build with a completely empty environment.
+
+**What's left, and why it's not a code bug**: with environment variables *still completely absent*,
+the build now gets further, but still fails later — during static generation of specific auth-gated
+pages (e.g. `/workflows/approvals`) whose Server Component body executes a real service call
+(`listExecutionsService`, etc.) at build time, which itself needs `DATABASE_URL` to be present.
+Confirmed by testing locally with syntactically-valid but non-functional placeholder values
+(`postgresql://placeholder:placeholder@localhost:5432/placeholder`, not real, never deployed anywhere)
+— **the build completes fully once *any* validly-formatted `DATABASE_URL`/`BETTER_AUTH_SECRET` exist**,
+regardless of whether that database is actually reachable yet. This means: **once you complete §5 and
+set real values on Vercel (§10), the very next deploy will build successfully** — this is not a
+separate blocker requiring another code change, it's the same one root blocker from §2.
 | Routing / middleware | ✅ Verified healthy — static pages return `200`, auth-gated pages correctly `307`-redirect to `/login` |
 | Database-dependent routes | Currently `500` (generic error, no leaked detail) — expected, since no `DATABASE_URL` is set |
 
@@ -41,7 +70,10 @@ There is really **one root blocker**, not several — every "waiting" item in th
 (§9) traces back to it:
 
 - **No production PostgreSQL database exists.** Nothing else can be verified end-to-end until this is
-  created, migrated, and its connection string is set as `DATABASE_URL`.
+  created, migrated, and its connection string is set as `DATABASE_URL`. This now also gates the
+  **build itself succeeding**, not just runtime — see §1.1: static generation of certain pages
+  executes real service calls at build time, so `DATABASE_URL`/`BETTER_AUTH_SECRET` must be set on
+  Vercel *before* the next deploy, not added afterward to an already-green build.
 
 Two secondary items, independent of the database:
 
@@ -339,6 +371,7 @@ for the Protection Bypass for Automation mechanism.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Every page loads but every API call returns a generic `500` | One or more required env vars (`DATABASE_URL`, `BETTER_AUTH_SECRET`, `APP_URL`) missing or invalid | Re-check §4's table against what's actually set on Vercel (`vercel env ls`) |
+| The **build itself** fails with `❌ Invalid environment variables: DATABASE_URL: Required` during "Generating static pages", naming a specific dashboard page | `DATABASE_URL`/`BETTER_AUTH_SECRET` are completely absent on Vercel — a handful of pages execute a real service call during static generation | Set the env vars in §4/§5 **before** the deploy that needs to succeed, not after — see §1.1. This is expected and matches §2's root blocker; it is not a new/separate issue |
 | `prisma migrate deploy` fails on `CREATE EXTENSION IF NOT EXISTS "vector"` | The `vector` extension wasn't enabled before migrating | Go back to §5.2 — enable it in the Supabase dashboard, then re-run the migration |
 | Pages load, reads work, but every `POST`/`PATCH`/`DELETE` fails with `403 Cross-origin request rejected` | `APP_URL`/`NEXT_PUBLIC_APP_URL` don't exactly match the real deployed origin | Set both to the exact URL (scheme + host, no trailing slash) shown in the Vercel dashboard, redeploy — full mechanism in [Production: `APP_URL` correctness](docs/deployment/production.md#app_url-correctness-the-csrfbetter-auth-trap) |
 | Database connections exhausted / intermittent connection errors under load | Using Supabase's **direct** connection (port `5432`) instead of the **pooled** one (port `6543`) | Re-copy the connection string using the "Connection pooling" option in Supabase (§5.3) |

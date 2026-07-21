@@ -76,11 +76,12 @@ configuration duplicating what Vercel already detects correctly.
    identically to Vercel).
 5. **Verify** — see [Smoke testing after a Vercel deploy](#smoke-testing-after-a-vercel-deploy) below.
 
-### The three Prisma/Next.js fixes this deployment target required
+### The fixes this deployment target required
 
-Getting Prisma working correctly in a Vercel serverless environment, from a monorepo, with a
-non-default Prisma Client output path, required three small, deployment-specific additions — none of
-them change application behavior, schema data shape, or architecture:
+Getting BOND OS building and running correctly in a Vercel serverless environment — a monorepo, a
+non-default Prisma Client output path, and a build environment with no local `.env` file — required a
+handful of small, deployment-specific additions. None of them change application behavior, schema data
+shape, or architecture:
 
 1. **`binaryTargets = ["native", "rhel-openssl-3.0.x"]`** added to `schema.prisma`'s `generator client`
    block. `native` alone resolves correctly for local dev and the Vercel build container, but pinning
@@ -100,6 +101,23 @@ them change application behavior, schema data shape, or architecture:
    verified, actual path), but added as defense-in-depth against Vercel's own documented dependency-cache
    behavior (a cached `node_modules` restore can sometimes skip re-running install-time lifecycle
    scripts) and as the officially Prisma-recommended baseline pattern for any Vercel deployment.
+4. **`packages/shared/src/logger.ts` and `packages/auth/src/server.ts` made lazy.** A build from a
+   genuinely clean GitHub clone (no local `.env` file present anywhere) revealed that `logger.ts` — 
+   imported by nearly every module in this codebase — called the zod-validated `getEnv()` at module
+   scope just to read `NODE_ENV`, and `server.ts` constructed the Better Auth instance eagerly at
+   module scope too. Both forced full environment validation (`DATABASE_URL`, `BETTER_AUTH_SECRET`)
+   the moment a route module was merely *imported* — including during Next's build-time "Collecting
+   page data" step, which evaluates every route. Both are now lazily constructed on first real use,
+   matching the lazy-singleton composition-root pattern already used everywhere else in this
+   codebase (`getAgentRegistry()`, `getCache()`, etc.) — `logger.ts` reads `process.env.NODE_ENV`
+   directly instead (the same already-established pattern `LOG_LEVEL` uses), and
+   `packages/auth/src/server.ts` exports a `getAuth()` singleton instead of an eagerly-constructed
+   `auth` constant. Verified by building with a completely empty environment: "Collecting page data"
+   now succeeds unconditionally. See
+   [`FINAL_DEPLOYMENT_GUIDE.md`](../../FINAL_DEPLOYMENT_GUIDE.md#11-a-real-bug-found-and-fixed-while-connecting-github-the-build-shouldnt-need-live-secrets-and-mostly-no-longer-does)
+   for the full investigation, including why static generation of a small number of pages still needs
+   *some* validly-formatted `DATABASE_URL`/`BETTER_AUTH_SECRET` to exist (not necessarily reachable) —
+   a property of those pages executing a real service call at build time, not a remaining bug.
 
 ### Rollback process
 
@@ -320,8 +338,9 @@ project's real commit history records per change, applied once more before shipp
       the standalone build and `next dev` are genuinely different code paths (see
       [Docker](./docker.md)).
 - [ ] **Vercel only:** Root Directory project setting is `apps/web` (not left at the repository root).
-- [ ] **Vercel only:** `binaryTargets`/`outputFileTracingIncludes`/`postinstall` fixes are present (see
-      [The three Prisma/Next.js fixes this deployment target required](#the-three-prismanextjs-fixes-this-deployment-target-required))
+- [ ] **Vercel only:** `binaryTargets`/`outputFileTracingIncludes`/`postinstall`/lazy-`logger`-and-`auth`
+      fixes are present (see
+      [The fixes this deployment target required](#the-fixes-this-deployment-target-required))
       — these are already committed to the repository, not a per-deploy manual step, but worth
       confirming if diagnosing a fresh clone or fork.
 - [ ] **Vercel only:** a Protection Bypass for Automation secret exists if any automated smoke test or

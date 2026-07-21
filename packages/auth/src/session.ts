@@ -4,13 +4,13 @@ import { getMembership } from '@bond-os/database';
 import { AuthError, ForbiddenError, type Role, roleSatisfies } from '@bond-os/shared';
 import { headers } from 'next/headers';
 
-import { auth } from './server';
+import { getAuth, type Auth } from './server';
 
-export type Session = Awaited<ReturnType<typeof auth.api.getSession>>;
+export type Session = Awaited<ReturnType<Auth['api']['getSession']>>;
 
 /** The current request's session, or `null` if unauthenticated. Safe to call anywhere on the server. */
 export async function getServerSession(): Promise<Session> {
-  return auth.api.getSession({ headers: await headers() });
+  return getAuth().api.getSession({ headers: await headers() });
 }
 
 /** Returns the current session, or throws `AuthError` (401) if there isn't one. */

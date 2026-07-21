@@ -2,9 +2,16 @@ import 'server-only';
 
 import pino from 'pino';
 
-import { getEnv } from './env';
-
-const isProd = () => getEnv().NODE_ENV === 'production';
+/**
+ * Read directly from `process.env`, not the zod-validated `getEnv()` — same
+ * reasoning as `LOG_LEVEL` below: `NODE_ENV` is always set contextually by
+ * Node/Next itself, and `logger` is imported by nearly every module in this
+ * codebase, so routing it through `getEnv()` would force full-schema
+ * validation (`DATABASE_URL`, `BETTER_AUTH_SECRET`, ...) just to construct a
+ * logger — including during Next's build-time "Collecting page data" step,
+ * which would then require production secrets to exist just to build.
+ */
+const isProd = () => process.env.NODE_ENV === 'production';
 
 /**
  * Centralized structured logger. Use `logger.child('scope')` to namespace
