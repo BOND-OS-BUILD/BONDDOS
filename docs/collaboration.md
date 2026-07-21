@@ -49,12 +49,19 @@ key from the caller's own authenticated `organizationId` (and, for per-user chan
 into reading another organization's or another user's data; see the write-boundary/authorization
 coverage in the Phase 9 security review for the enforcement proof.
 
-| `type` | Channel key | Snapshot |
-|---|---|---|
-| `presence` | `presence:org:<id>:page:<page>` | Current viewers of one page (docs/presence.md) |
-| `notifications` | `notifications:user:<id>` | The caller's own unread count + latest 10 (docs/notifications.md) |
-| `activity` | `activity:org:<id>` | Latest 30 org-wide Activity Feed events (docs/activity-feed.md) |
-| `dashboard` | `dashboard:org:<id>` | Pending approvals / active workflow runs / unread notifications (below) |
+| `type` | Channel key | Snapshot | UI subscriber |
+|---|---|---|---|
+| `presence` | `presence:org:<id>:page:<page>` | Current viewers of one page (docs/presence.md) | `PresenceBar`, on Project/Meeting/Document/Customer detail pages |
+| `notifications` | `notifications:user:<id>` | The caller's own unread count + latest 10 (docs/notifications.md) | `NotificationBell`, mounted in the dashboard topbar |
+| `activity` | `activity:org:<id>` | Latest 30 org-wide Activity Feed events (docs/activity-feed.md) | none yet — the Activity page is a server-rendered snapshot refreshed on navigation |
+| `dashboard` | `dashboard:org:<id>` | Pending approvals / active workflow runs / unread notifications (below) | none yet — the Team Dashboard page is a server-rendered snapshot refreshed on navigation |
+
+Every channel type is exercised and authorization-tested at the transport layer (see the Phase 9 security
+review), but `activity` and `dashboard` don't have a live client subscriber wired up yet — those two pages
+update the same way every other page in this codebase did before Phase 9, on navigation/reload. Wiring a
+subscriber for either is the same `useEffect` + `EventSource` pattern `PresenceBar`/`NotificationBell`
+already use, not new plumbing — deliberately left for whenever those two specific pages need to feel
+"live" rather than building it speculatively ahead of a concrete need.
 
 ## Live Dashboards: the `dashboard` channel
 

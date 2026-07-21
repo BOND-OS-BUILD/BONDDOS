@@ -20,6 +20,7 @@ import {
 } from '@bond-os/ui';
 
 import { setActiveOrganization } from '@/app/(dashboard)/actions';
+import { NotificationBell } from '@/features/notifications/components/notification-bell';
 
 interface TopbarUser {
   name: string;
@@ -79,6 +80,7 @@ export function Topbar({ organizations, active, user }: TopbarProps) {
       </Dropdown>
 
       <div className="flex items-center gap-2">
+        <NotificationBell />
         <ThemeToggle />
         <Dropdown>
           <DropdownTrigger className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring">
