@@ -204,6 +204,7 @@ dev-server smoke test, and a regression spot-check — see **[../CONTRIBUTING.md
 - **[../README.md](../README.md)** — project overview, features by phase, installation, quick start, roadmap (explicitly out-of-scope items), license status.
 - **[../CONTRIBUTING.md](../CONTRIBUTING.md)** — repository standards, branch strategy, commit conventions, PR process, review checklist, coding style, documentation and testing requirements.
 - **[MANIFEST.md](MANIFEST.md)** — the complete file-by-file manifest of this documentation suite, its verification summary, and known documentation deviations/gaps.
+- **[../FINAL_DEPLOYMENT_GUIDE.md](../FINAL_DEPLOYMENT_GUIDE.md)** — the single, complete, follow-along guide for taking BOND OS from its current deployed-but-database-less state to fully operational in production.
 - **docs/README.md** — this page.
 
 ## Deep-dive references (phase-era docs)

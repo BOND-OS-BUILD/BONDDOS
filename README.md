@@ -294,3 +294,7 @@ checklist this project actually uses, and coding/documentation/testing requireme
 
 The full documentation index — every architecture, database, API, AI, workflow, agent, security,
 deployment, development, testing, and release doc — lives at **[docs/README.md](docs/README.md)**.
+
+Deploying to production? **[FINAL_DEPLOYMENT_GUIDE.md](FINAL_DEPLOYMENT_GUIDE.md)** is the single,
+complete, follow-along guide — current deployment status, exact services to create, environment
+variables, migration commands, a verification checklist, and troubleshooting.

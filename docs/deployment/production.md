@@ -66,8 +66,10 @@ configuration duplicating what Vercel already detects correctly.
 2. **Set environment variables.** See [Vercel Environment Variables](./vercel-env.md) for the complete
    list with descriptions and which are required vs. optional. At minimum: `DATABASE_URL`,
    `BETTER_AUTH_SECRET`, `APP_URL`, `NEXT_PUBLIC_APP_URL`.
-3. **Deploy.** `vercel deploy` for a preview, `vercel deploy --prod` (or merging to the production
-   branch, once Git integration triggers deploys) for production.
+3. **Deploy.** The project is connected to `BOND-OS-BUILD/BONDDOS` via Vercel's GitHub integration
+   (`productionBranch: "main"`) — pushing to `main` triggers a production deployment automatically,
+   and opening a PR triggers a preview deployment. `vercel deploy` / `vercel deploy --prod` from the
+   CLI remain available for a manual/out-of-band deploy.
 4. **Run migrations against the production database**, exactly as for any other deployment target —
    Vercel's build does not run `prisma migrate deploy` for you (see
    [Database migrations are not automatic](#database-migrations-are-not-automatic) below; this applies
