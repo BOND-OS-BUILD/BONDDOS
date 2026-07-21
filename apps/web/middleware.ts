@@ -11,7 +11,14 @@ import { NextResponse, type NextRequest } from 'next/server';
  */
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const hasSession = Boolean(getSessionCookie(request));
+  // The cookiePrefix MUST match packages/auth/src/server.ts's
+  // `advanced.cookiePrefix` ('bondos'). Without it, getSessionCookie looks for
+  // the default 'better-auth.session_token' cookie, never finds the actual
+  // '__Secure-bondos.session_token', and redirects every logged-in user back
+  // to /login. getSessionCookie already checks both the '__Secure-'-prefixed
+  // (production/https) and bare (local/http) cookie names, so this one option
+  // is all that's needed for both environments.
+  const hasSession = Boolean(getSessionCookie(request, { cookiePrefix: 'bondos' }));
 
   const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route));
 

@@ -1,4 +1,37 @@
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import type { NextConfig } from 'next';
+
+// ── Prisma query-engine bundling fix (Vercel serverless) ──────────────────
+// @bond-os/database generates its Prisma Client — including the native
+// query-engine binary (libquery_engine-rhel-openssl-3.0.x.so.node) — to a
+// custom path, packages/database/src/generated. On Vercel the client is
+// bundled into apps/web/.next/server/chunks and, at runtime, searches for its
+// engine relative to the app dir: /var/task/apps/web/src/generated,
+// /var/task/apps/web/.next/server, etc. It does NOT search
+// /var/task/packages/database/src/generated, which is the only place plain
+// file-tracing leaves the engine — so the first real DB query throws
+// PrismaClientInitializationError ("could not locate the Query Engine for
+// runtime rhel-openssl-3.0.x"). (Confirmed in production runtime logs; it
+// only surfaces on an actual query, which is why a green build never caught
+// it.) Fix: at build time (next.config is evaluated before the build/trace),
+// copy the generated client into apps/web/src/generated — one of the paths
+// Prisma actually searches — and force-include it in every function's trace
+// via outputFileTracingIncludes below.
+const prismaEngineSrc = join(process.cwd(), '..', '..', 'packages', 'database', 'src', 'generated');
+const prismaEngineDest = join(process.cwd(), 'src', 'generated');
+// Copy ONLY the native engine binaries (*.so.node) — not the generated .js
+// client, which would otherwise be linted by `next build` and fail on its
+// require()-style imports. The engine binary is all Prisma needs to find at
+// one of its runtime search paths.
+if (existsSync(prismaEngineSrc)) {
+  mkdirSync(prismaEngineDest, { recursive: true });
+  for (const file of readdirSync(prismaEngineSrc)) {
+    if (file.endsWith('.so.node')) {
+      copyFileSync(join(prismaEngineSrc, file), join(prismaEngineDest, file));
+    }
+  }
+}
 
 const nextConfig: NextConfig = {
   // Standalone output is for the Docker image (see Dockerfile) — it traces
@@ -37,7 +70,11 @@ const nextConfig: NextConfig = {
   // the database, even though the build itself succeeds. Applies to every
   // route since almost every route touches the database.
   outputFileTracingIncludes: {
-    '/**': ['../../packages/database/src/generated/**/*'],
+    // 'src/generated/**/*' is the copy made above, landing at
+    // /var/task/apps/web/src/generated (a path Prisma searches). The second
+    // entry keeps the original monorepo-relative copy as a belt-and-suspenders
+    // fallback.
+    '/**': ['src/generated/**/*', '../../packages/database/src/generated/**/*'],
   },
   eslint: {
     ignoreDuringBuilds: false,

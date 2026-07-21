@@ -1,0 +1,3 @@
+
+# Prisma engine copied into apps/web by next.config.ts at build time
+/src/generated/
