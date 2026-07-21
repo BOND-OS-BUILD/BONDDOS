@@ -202,6 +202,7 @@ dev-server smoke test, and a regression spot-check — see **[../CONTRIBUTING.md
 
 - **[../README.md](../README.md)** — project overview, features by phase, installation, quick start, roadmap (explicitly out-of-scope items), license status.
 - **[../CONTRIBUTING.md](../CONTRIBUTING.md)** — repository standards, branch strategy, commit conventions, PR process, review checklist, coding style, documentation and testing requirements.
+- **[MANIFEST.md](MANIFEST.md)** — the complete file-by-file manifest of this documentation suite, its verification summary, and known documentation deviations/gaps.
 - **docs/README.md** — this page.
 
 ## Deep-dive references (phase-era docs)
