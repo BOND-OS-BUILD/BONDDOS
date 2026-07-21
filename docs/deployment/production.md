@@ -11,9 +11,10 @@ pipeline) doesn't exist, that's stated plainly rather than assumed.
 
 ## What "production" means in this repository today
 
-There is exactly one concretely-built, tested-by-construction production artifact: the Docker image
-defined by the root `Dockerfile` (see [Docker](./docker.md) for the full stage-by-stage breakdown).
-Building it:
+Two concretely-built, tested-by-construction production paths exist: the Docker image defined by the
+root `Dockerfile` (self-hosted, see [Docker](./docker.md) for the full stage-by-stage breakdown), and
+a live Vercel deployment (see [Deploying to Vercel](#deploying-to-vercel) below). Building the Docker
+image:
 
 ```bash
 docker build -t bond-os .
@@ -25,15 +26,128 @@ or, for the full local stack (Postgres + Redis + this image, wired together):
 docker compose --profile full up -d --build
 ```
 
-No other deployment target — no Vercel project file, no Kubernetes manifests, no Terraform/Pulumi
-infrastructure code, no cloud-provider-specific config (AWS/GCP/Azure) — exists anywhere in this
-repository. The design does deliberately keep the door open to Vercel: the README's own architecture
-notes state that Realtime (P9) uses reconnecting SSE rather than a WebSocket server "chosen
-specifically to keep the app deployable both as a Docker container and on Vercel without committing to
-one always-on process." That is a documented design constraint honored by the code, not a configured
-deployment — there is no `vercel.json` and no Vercel-specific build hook in this repo. Deploying to
-Vercel (or any other Node host) is architecturally possible but has not been set up here; the Docker
-image is the only path that has actually been built and is described in depth below.
+No other deployment target — no Kubernetes manifests, no Terraform/Pulumi infrastructure code, no
+cloud-provider-specific config (AWS/GCP/Azure) — exists anywhere in this repository. The Vercel path
+was previously an architectural intent only (the README's own notes state Realtime (P9) uses
+reconnecting SSE rather than a WebSocket server "chosen specifically to keep the app deployable both
+as a Docker container and on Vercel without committing to one always-on process") — it is now a
+verified, working deployment target, not just a design constraint honored in the abstract.
+
+## Deploying to Vercel
+
+### Project configuration
+
+BOND OS is a pnpm + Turborepo monorepo with the Next.js app at `apps/web` and the Prisma schema in a
+sibling package (`packages/database`) — deploying it correctly to Vercel requires the monorepo to be
+configured, not just imported with defaults. The exact, verified-working configuration:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| Root Directory | `apps/web` | Where the Next.js app and its own `package.json` (with `next` as a dependency) live. **Setting this correctly is the single most important step** — see [Common deployment issues](#common-deployment-issues) below for what happens when it's wrong. |
+| Framework Preset | Next.js | Auto-detected once Root Directory is correct (Vercel scans the Root Directory's own `package.json` for `next`). |
+| Build Command | `turbo run build` (auto-detected) | Vercel's own Turborepo integration sets this automatically once it detects `turbo.json` at an ancestor of Root Directory — no manual override or `vercel.json` needed. This correctly runs `packages/database`'s `generate` task (via `turbo.json`'s `dependsOn: ["^generate"]`) before `apps/web`'s build, exactly mirroring what `pnpm build` does locally. |
+| Install Command | `corepack pnpm install` (auto-detected) | Vercel reads `packageManager: "pnpm@9.15.0"` from the repository root `package.json` and the `pnpm-lock.yaml`, and correctly installs from the true monorepo root even though Root Directory points at a subdirectory. |
+| Output Directory | Framework default (`.next`) | No override needed. |
+| `sourceFilesOutsideRootDirectory` | `true` | A Vercel project setting (not `vercel.json`) that must be enabled for the build to see sibling `packages/*` — without it, only `apps/web`'s own files are uploaded and the build fails immediately with `No package.json found in /` when the build command tries to reach the monorepo root. Vercel sets this automatically when it detects the workspace structure during project creation. |
+
+No `vercel.json` is present in this repository, and none is required — every setting above is either
+Vercel's own zero-config Turborepo/pnpm detection (per
+[Vercel's official Turborepo monorepo guide](https://vercel.com/docs/monorepos/turborepo)) or a
+one-time project setting (Root Directory) configured when the project is created, not a file in the
+repo. Adding a `vercel.json` was evaluated and deliberately not done, to avoid unnecessary
+configuration duplicating what Vercel already detects correctly.
+
+### Deployment steps
+
+1. **Import the repository.** From the Vercel dashboard: New Project → Import the
+   `BOND-OS-BUILD/BONDDOS` GitHub repository (or via CLI: `vercel link` from the repository root,
+   which prompts for team/project). Set **Root Directory to `apps/web`** during import — this is the
+   one setting that cannot be skipped.
+2. **Set environment variables.** See [Vercel Environment Variables](./vercel-env.md) for the complete
+   list with descriptions and which are required vs. optional. At minimum: `DATABASE_URL`,
+   `BETTER_AUTH_SECRET`, `APP_URL`, `NEXT_PUBLIC_APP_URL`.
+3. **Deploy.** `vercel deploy` for a preview, `vercel deploy --prod` (or merging to the production
+   branch, once Git integration triggers deploys) for production.
+4. **Run migrations against the production database**, exactly as for any other deployment target —
+   Vercel's build does not run `prisma migrate deploy` for you (see
+   [Database migrations are not automatic](#database-migrations-are-not-automatic) below; this applies
+   identically to Vercel).
+5. **Verify** — see [Smoke testing after a Vercel deploy](#smoke-testing-after-a-vercel-deploy) below.
+
+### The three Prisma/Next.js fixes this deployment target required
+
+Getting Prisma working correctly in a Vercel serverless environment, from a monorepo, with a
+non-default Prisma Client output path, required three small, deployment-specific additions — none of
+them change application behavior, schema data shape, or architecture:
+
+1. **`binaryTargets = ["native", "rhel-openssl-3.0.x"]`** added to `schema.prisma`'s `generator client`
+   block. `native` alone resolves correctly for local dev and the Vercel build container, but pinning
+   `rhel-openssl-3.0.x` explicitly is defense-in-depth against the build and runtime containers ever
+   resolving to different engine targets — a well-documented class of Prisma-on-Vercel failure
+   (`PrismaClientInitializationError: Query engine library ... could not be found`).
+2. **`outputFileTracingIncludes`** added to `next.config.ts`, pointing at
+   `../../packages/database/src/generated/**/*`. `@bond-os/database` generates its Prisma Client to a
+   custom path outside `apps/web` (`packages/database/src/generated`, not the default
+   `node_modules/.prisma/client`), and the query-engine binary is loaded dynamically at runtime — not a
+   statically-analyzable `require()` — so Next's default file-tracing misses it. Without this, the
+   build succeeds but every deployed function that queries the database throws at the first request,
+   not at build time — confirmed directly by inspecting the build's `.nft.json` trace manifests, which
+   now correctly list `generated/libquery_engine-rhel-openssl-3.0.x.so.node`.
+3. **`"postinstall": "prisma generate"`** added to `packages/database/package.json`. Redundant with
+   `turbo.json`'s `dependsOn: ["^generate"]` when the Build Command goes through `turbo run build` (the
+   verified, actual path), but added as defense-in-depth against Vercel's own documented dependency-cache
+   behavior (a cached `node_modules` restore can sometimes skip re-running install-time lifecycle
+   scripts) and as the officially Prisma-recommended baseline pattern for any Vercel deployment.
+
+### Rollback process
+
+Vercel keeps every previous deployment addressable by its own unique URL and deployment ID — rolling
+back does not require a new build or a git revert:
+
+```bash
+vercel rollback [deployment-url-or-id]      # revert production to a specific prior deployment
+# or, without an argument, roll back to the most recent prior production deployment:
+vercel rollback
+```
+
+Equivalently, from the dashboard: **Deployments** → find the last known-good deployment → **Promote to
+Production**. Both approaches re-point the production alias at an already-built deployment's output —
+no rebuild happens, so rollback is fast and doesn't re-run migrations. **A rollback does not revert a
+database migration** — if the deployment being rolled back away from included a schema migration, the
+database schema stays as that migration left it; reverting a migration is a separate, manual
+`prisma migrate` operation the rollback command has no knowledge of. Roll back the application first if
+a bad deploy needs to stop serving traffic immediately, then handle any needed schema reversal
+separately.
+
+### Smoke testing after a Vercel deploy
+
+If [Deployment Protection](https://vercel.com/docs/deployment-protection) is enabled (Vercel's default
+for team projects — every `*.vercel.app` URL redirects to a Vercel-authenticated SSO wall unless a
+custom domain is attached), automated smoke tests need
+[Protection Bypass for Automation](https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection/protection-bypass-automation):
+enable it once per project (Project Settings → Deployment Protection, or
+`PATCH /v1/projects/{id}/protection-bypass` with `{"generate": {}}`), then pass the generated secret as
+an `x-vercel-protection-bypass` header on test requests. This does not disable protection for regular
+visitors — only requests carrying the header bypass it.
+
+### Common deployment issues
+
+Two real, encountered-and-fixed issues from setting this deployment up, beyond the Prisma fixes above:
+
+- **`No package.json found in /`** (install command fails) — Root Directory was not set, or a
+  `vercel.json`-level `buildCommand`/`installCommand` override used `cd ../..` while the CLI had only
+  been linked to the `apps/web` subdirectory directly (uploading just that folder, not the full repo).
+  Fix: link/import at the repository root, and set Root Directory as a **project setting** (`apps/web`)
+  rather than trying to work around it with relative-path build command tricks.
+- **`No Next.js version detected. ... check your Root Directory setting`** — the build reached
+  Vercel's Next.js-specific post-processing step while Root Directory was still pointing at (or
+  defaulting to) the monorepo root, whose `package.json` has no `next` dependency (only
+  `apps/web/package.json` does). Fix: same as above — Root Directory must be the actual app directory.
+- See [Troubleshooting: pgvector extension missing](./troubleshooting.md#pgvector-extension-missing)
+  for the separate (Docker-specific, not Vercel-specific) pgvector gotcha — Vercel deployments
+  typically point `DATABASE_URL` at a managed Postgres provider (Supabase, Neon, RDS) rather than the
+  bundled `docker-compose.yml` service, so this specific gotcha doesn't apply the same way, but the
+  underlying requirement (the `vector` extension must be available) still does.
 
 ## Building for production without Docker
 
@@ -203,13 +317,25 @@ project's real commit history records per change, applied once more before shipp
 - [ ] A dev-server or containerized smoke test against the built artifact, not just the dev server —
       the standalone build and `next dev` are genuinely different code paths (see
       [Docker](./docker.md)).
+- [ ] **Vercel only:** Root Directory project setting is `apps/web` (not left at the repository root).
+- [ ] **Vercel only:** `binaryTargets`/`outputFileTracingIncludes`/`postinstall` fixes are present (see
+      [The three Prisma/Next.js fixes this deployment target required](#the-three-prismanextjs-fixes-this-deployment-target-required))
+      — these are already committed to the repository, not a per-deploy manual step, but worth
+      confirming if diagnosing a fresh clone or fork.
+- [ ] **Vercel only:** a Protection Bypass for Automation secret exists if any automated smoke test or
+      monitoring needs to reach a Deployment-Protection-gated URL.
 
 ## Related documents
 
 - [Docker](./docker.md) — the image this section builds and runs, explained stage by stage.
-- [Environment Variables](./environment.md) — full reference.
-- [Scheduler](../workflows/scheduler.md) — the tick endpoint in full detail.
+- [Vercel Environment Variables](./vercel-env.md) — the Vercel-specific env var reference (required/
+  optional, example values, which services depend on each).
+- [Environment Variables](./environment.md) — full reference for any deployment target.
+- [Scheduler](../workflows/scheduler.md) — the tick endpoint in full detail, including the Vercel Cron
+  wiring caveat (a `GET`-vs-`POST` mismatch — see [vercel-env.md](./vercel-env.md#wiring-the-scheduler-vercel-cron)).
 - [Backups](./backups.md) — what's manual today.
 - [Monitoring](./monitoring.md) — what observability exists, and what doesn't.
 - [Security: Secrets](../security/secrets.md) — plaintext-at-rest columns and what that means operationally.
 - [Architecture: Scalability](../architecture/scalability.md) — the broader scaling picture this document's [Scaling considerations](#scaling-considerations) section is drawn from.
+- [Troubleshooting](./troubleshooting.md) — the Windows symlink limitation (Vercel's Linux build
+  environment is unaffected) and other environment-specific gotchas.

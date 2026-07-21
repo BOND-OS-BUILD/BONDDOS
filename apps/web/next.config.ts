@@ -27,6 +27,18 @@ const nextConfig: NextConfig = {
   // requires of their own — externalized proactively for the same reason,
   // rather than rediscovering the same class of build failure again.
   serverExternalPackages: ['pino', 'pino-pretty', 'pdf-parse', 'mammoth'],
+  // @bond-os/database generates its Prisma Client to a custom path outside
+  // apps/web (packages/database/src/generated), not the default
+  // node_modules/.prisma/client Next's file-tracing looks for automatically.
+  // The generated query-engine binary is loaded dynamically at runtime (not
+  // a statically-analyzable require), so it isn't picked up by default
+  // tracing either — without this, a deployed serverless function throws
+  // "Query engine library ... could not be found" the first time it queries
+  // the database, even though the build itself succeeds. Applies to every
+  // route since almost every route touches the database.
+  outputFileTracingIncludes: {
+    '/**': ['../../packages/database/src/generated/**/*'],
+  },
   eslint: {
     ignoreDuringBuilds: false,
   },

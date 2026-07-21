@@ -51,6 +51,11 @@ generator client {
   provider        = "prisma-client-js"
   output          = "../src/generated"
   previewFeatures = ["postgresqlExtensions"]
+  // "native" covers local dev (Windows/macOS/Linux) and the Vercel build
+  // container; rhel-openssl-3.0.x is added explicitly for Vercel's Node.js
+  // serverless runtime, since relying on "native" alone assumes the build
+  // and runtime containers always resolve to the identical engine target.
+  binaryTargets   = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {

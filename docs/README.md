@@ -157,6 +157,7 @@ Running BOND OS locally, in Docker, and in production.
 - **[deployment/production.md](deployment/production.md)** — production deployment.
 - **[deployment/docker.md](deployment/docker.md)** — the bundled `Dockerfile` and `docker-compose.yml`.
 - **[deployment/environment.md](deployment/environment.md)** — every environment variable and its fallback behavior.
+- **[deployment/vercel-env.md](deployment/vercel-env.md)** — the Vercel-specific environment variable reference (required/optional, example values, which services depend on each).
 - **[deployment/github.md](deployment/github.md)** — GitHub-related setup. **Note:** this repository currently has no `.github/workflows` directory — there is no CI configured yet (confirmed on disk).
 - **[deployment/backups.md](deployment/backups.md)** — database backup approach.
 - **[deployment/monitoring.md](deployment/monitoring.md)** — monitoring and observability.
