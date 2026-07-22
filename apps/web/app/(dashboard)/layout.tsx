@@ -1,4 +1,4 @@
-import { requireAuth } from '@bond-os/auth';
+import { isPlatformAdmin, requireAuth } from '@bond-os/auth';
 
 import { getActiveOrganization } from '@/lib/organization';
 
@@ -24,9 +24,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
     avatar: session.user.image ?? null,
   };
 
+  const platformAdmin = await isPlatformAdmin();
+
   return (
     <div className="flex min-h-screen bg-background">
-      <Sidebar />
+      <Sidebar isPlatformAdmin={platformAdmin} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar organizations={organizations} active={active} user={user} />
         <main className="flex-1 overflow-y-auto p-6">{children}</main>

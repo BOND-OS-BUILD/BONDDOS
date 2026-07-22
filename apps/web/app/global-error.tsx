@@ -13,6 +13,17 @@ import './globals.css';
 export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   useEffect(() => {
     console.error(error);
+    // Phase 10: best-effort client error report (root-layout failure).
+    void fetch('/api/errors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: error.message,
+        stack: error.stack,
+        url: typeof window !== 'undefined' ? window.location.href : undefined,
+        digest: error.digest,
+      }),
+    }).catch(() => {});
   }, [error]);
 
   return (

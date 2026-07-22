@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   Activity,
+  BarChart3,
   Bot,
   Brain,
   Building2,
@@ -26,6 +27,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  ShieldCheck,
   Sparkles,
   Users,
   UsersRound,
@@ -69,6 +71,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: ROUTES.teamDashboard, label: 'Team Dashboard', icon: Gauge },
   { href: ROUTES.people, label: 'People', icon: Users },
   { href: ROUTES.integrations, label: 'Integrations', icon: Plug },
+  { href: ROUTES.analytics, label: 'Analytics', icon: BarChart3 },
   { href: ROUTES.settings, label: 'Settings', icon: Settings },
 ];
 
@@ -81,16 +84,21 @@ function isNavItemActive(pathname: string, href: string): boolean {
     href === ROUTES.bond ||
     href === ROUTES.agents ||
     href === ROUTES.workflows ||
-    href === ROUTES.spaces
+    href === ROUTES.spaces ||
+    href === ROUTES.admin
   ) {
     return pathname.startsWith(href);
   }
   return pathname === href;
 }
 
-export function Sidebar() {
+export function Sidebar({ isPlatformAdmin = false }: { isPlatformAdmin?: boolean }) {
   const pathname = usePathname();
   const { sidebarCollapsed, toggleSidebar } = useUiStore();
+
+  const navItems = isPlatformAdmin
+    ? [...NAV_ITEMS, { href: ROUTES.admin, label: 'Admin', icon: ShieldCheck }]
+    : NAV_ITEMS;
 
   return (
     <aside
@@ -100,7 +108,7 @@ export function Sidebar() {
       )}
     >
       <nav className="flex-1 space-y-1 overflow-y-auto p-2">
-        {NAV_ITEMS.map((item) => {
+        {navItems.map((item) => {
           const active = isNavItemActive(pathname, item.href);
           const Icon = item.icon;
 

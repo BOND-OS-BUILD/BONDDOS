@@ -6,6 +6,17 @@ import { useEffect } from 'react';
 export default function ErrorBoundary({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   useEffect(() => {
     console.error(error);
+    // Phase 10: report client errors into the grouped error store.
+    void fetch('/api/errors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: error.message,
+        stack: error.stack,
+        url: typeof window !== 'undefined' ? window.location.href : undefined,
+        digest: error.digest,
+      }),
+    }).catch(() => {});
   }, [error]);
 
   return (
