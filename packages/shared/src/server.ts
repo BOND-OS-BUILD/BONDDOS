@@ -11,4 +11,5 @@ export * from './env';
 export * from './logger';
 export * from './queue';
 export * from './rate-limit';
+export * from './request-context';
 export * from './virus-scan';

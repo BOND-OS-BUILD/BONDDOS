@@ -1,6 +1,7 @@
 import { requireAuth } from '@bond-os/auth';
 import { getOrganizationsForUser, type OrganizationForUser } from '@bond-os/database';
 import { AuthError } from '@bond-os/shared';
+import { updateRequestContext } from '@bond-os/shared/server';
 import { cookies } from 'next/headers';
 
 export const ACTIVE_ORG_COOKIE = 'bondos_active_org';
@@ -45,5 +46,6 @@ export async function requireActiveOrganizationId(): Promise<string> {
   if (!active) {
     throw new AuthError('No active organization. Create or join an organization first.');
   }
+  updateRequestContext({ organizationId: active.id });
   return active.id;
 }

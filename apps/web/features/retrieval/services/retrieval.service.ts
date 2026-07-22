@@ -3,6 +3,7 @@ import { logAiRequest, prisma, vectorSimilaritySearch, type EmbeddingSourceType 
 import { NotFoundError, ROLES } from '@bond-os/shared';
 
 import { getEmbeddingProvider } from '@/features/embeddings/services/embedding-provider.service';
+import { recordSearchQuerySafe } from '@/features/search-analytics/services/search-analytics.service';
 
 import { hybridSearch, sourceTypeToKind, type HybridSearchResult } from './hybrid-search.service';
 
@@ -41,6 +42,15 @@ export async function retrieve(
     organizationId,
     action: 'retrieval.search',
     metadata: { query: rawQuery, resultCount: results.length, durationMs },
+  });
+  // Phase 10 — search analytics for retrieval (captures zero-result queries too).
+  await recordSearchQuerySafe({
+    organizationId,
+    query: rawQuery,
+    source: 'RETRIEVAL',
+    resultCount: results.length,
+    durationMs,
+    citationCount: results.length,
   });
 
   return results;

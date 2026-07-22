@@ -103,6 +103,24 @@ const envSchema = z.object({
   // external caller (Vercel Cron, GitHub Actions, OS Task Scheduler) to the
   // tick URL. See docs/scheduling.md.
   CRON_SECRET: z.string().optional().or(z.literal('')),
+
+  // ── Phase 10 — Operations, Observability & Administration ────────────────
+  // Comma-separated allowlist of emails granted platform-admin (Admin Console)
+  // access without the User.isPlatformAdmin DB flag — the bootstrap path for
+  // the first administrator. See packages/auth/src/admin.ts.
+  PLATFORM_ADMIN_EMAILS: z.string().optional().or(z.literal('')),
+  // Fallback rate limit applied when no RateLimitPolicy row matches a scope
+  // (mirrors the *_MAX_* knob precedent). See rate-limit.service.
+  RATE_LIMIT_DEFAULT_LIMIT: z.coerce.number().int().positive().default(120),
+  RATE_LIMIT_DEFAULT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  // Retention windows (days) for the observability tables, used by the ops
+  // cleanup routine. 0 disables cleanup for that table.
+  ERROR_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
+  USAGE_RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
+  SECURITY_EVENT_RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
+  SEARCH_LOG_RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
+  // Default per-organization storage soft-limit (MB), surfaced by metering.
+  STORAGE_LIMIT_MB: z.coerce.number().int().positive().default(1024),
 });
 
 export type Env = z.infer<typeof envSchema>;

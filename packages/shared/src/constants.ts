@@ -65,6 +65,8 @@ export const ROUTES = {
   spaces: '/spaces',
   teamDashboard: '/team-dashboard',
   sharedConversations: '/bond/shared',
+  analytics: '/analytics',
+  admin: '/admin',
   settings: '/settings',
   settingsProfile: '/settings/profile',
   settingsOrganization: '/settings/organization',

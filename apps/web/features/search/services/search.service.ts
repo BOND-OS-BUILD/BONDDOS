@@ -16,6 +16,7 @@ import { listCustomersService } from '@/features/customers/services/customer.ser
 import { listDocumentsService } from '@/features/documents/services/document.service';
 import { listMeetingsService } from '@/features/meetings/services/meeting.service';
 import { listProjectsService } from '@/features/projects/services/project.service';
+import { recordSearchQuerySafe } from '@/features/search-analytics/services/search-analytics.service';
 import { listTasksService } from '@/features/tasks/services/task.service';
 
 const RESULTS_PER_TYPE = 5;
@@ -47,6 +48,7 @@ export async function searchService(organizationId: string, q: string): Promise<
   await requireRole(organizationId, ROLES.MEMBER);
   const pageArgs = { page: 1, pageSize: RESULTS_PER_TYPE, search: q, sortDir: 'desc' as const };
 
+  const start = Date.now();
   const [projects, tasks, documents, meetings, customers, library] = await Promise.all([
     listProjectsService(organizationId, { ...pageArgs, sortBy: 'createdAt' }),
     listTasksService(organizationId, { ...pageArgs, sortBy: 'createdAt' }),
@@ -56,7 +58,7 @@ export async function searchService(organizationId: string, q: string): Promise<
     searchEntities(organizationId, q, RESULTS_PER_TYPE),
   ]);
 
-  return {
+  const results: SearchResults = {
     projects: projects.items,
     tasks: tasks.items,
     documents: documents.items,
@@ -64,4 +66,22 @@ export async function searchService(organizationId: string, q: string): Promise<
     customers: customers.items,
     library,
   };
+
+  // Phase 10 — search analytics (best-effort, never blocks the search).
+  const resultCount =
+    results.projects.length +
+    results.tasks.length +
+    results.documents.length +
+    results.meetings.length +
+    results.customers.length +
+    results.library.length;
+  await recordSearchQuerySafe({
+    organizationId,
+    query: q,
+    source: 'FULL_TEXT',
+    resultCount,
+    durationMs: Date.now() - start,
+  });
+
+  return results;
 }

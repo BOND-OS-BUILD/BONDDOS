@@ -22,6 +22,39 @@ function getSupabaseClient() {
   return client;
 }
 
+export interface StorageHealth {
+  configured: boolean;
+  healthy: boolean;
+  latencyMs?: number;
+  message?: string;
+}
+
+/**
+ * Phase 10 — lightweight storage health probe for the health monitoring
+ * subsystem. When Supabase isn't configured this is a benign
+ * `configured:false, healthy:true` (uploads are simply disabled, not broken).
+ */
+export async function checkStorageHealth(): Promise<StorageHealth> {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return { configured: false, healthy: true, message: 'Storage not configured (uploads disabled).' };
+  }
+  const start = Date.now();
+  try {
+    const { error } = await supabase.storage.from(BUCKET).list('', { limit: 1 });
+    const latencyMs = Date.now() - start;
+    if (error) return { configured: true, healthy: false, latencyMs, message: error.message };
+    return { configured: true, healthy: true, latencyMs };
+  } catch (err) {
+    return {
+      configured: true,
+      healthy: false,
+      latencyMs: Date.now() - start,
+      message: err instanceof Error ? err.message : 'Storage check failed.',
+    };
+  }
+}
+
 export interface UploadResult {
   path: string;
   publicUrl: string;

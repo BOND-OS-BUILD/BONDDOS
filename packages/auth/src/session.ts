@@ -2,6 +2,7 @@ import 'server-only';
 
 import { getMembership } from '@bond-os/database';
 import { AuthError, ForbiddenError, type Role, roleSatisfies } from '@bond-os/shared';
+import { updateRequestContext } from '@bond-os/shared/server';
 import { headers } from 'next/headers';
 
 import { getAuth, type Auth } from './server';
@@ -19,6 +20,7 @@ export async function requireAuth() {
   if (!session) {
     throw new AuthError();
   }
+  updateRequestContext({ userId: session.user.id });
   return session;
 }
 

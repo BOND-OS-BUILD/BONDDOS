@@ -214,6 +214,11 @@ model User {
   phone         String?
   timezone      String?
   status        UserStatus @default(ACTIVE)
+  /// Phase 10: platform-level administrator (cross-org Admin Console access).
+  /// Distinct from the org-scoped `Role` (OWNER/ADMIN/MEMBER) — a platform
+  /// admin operates the whole deployment, not a single organization. Bootstrap
+  /// via the PLATFORM_ADMIN_EMAILS env allowlist; see packages/auth admin gate.
+  isPlatformAdmin Boolean  @default(false)
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
@@ -2310,4 +2315,211 @@ model EntityVersionSnapshot {
 
   @@index([organizationId, entityType, entityId, version])
   @@map("entity_version_snapshots")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 10 — Enterprise Operations, Observability & Administration
+//
+// These models deliberately use plain scalar FK columns (organizationId /
+// userId as `String?`) WITHOUT Prisma `@relation` back-references. Rationale:
+// (1) they are append-only operational/observability records (audit, errors,
+// security, usage, search logs) that should survive — and are cleaned by
+// retention rather than cascade — independently of the org/user they mention;
+// (2) it keeps this migration purely additive, touching zero existing
+// relations on User/Organization and therefore carrying zero regression risk
+// to P0–P9. Tenant scoping is enforced in the service layer exactly as
+// everywhere else in this codebase. See docs/admin.md and docs/monitoring.md.
+// ─────────────────────────────────────────────────────────────────────────
+
+enum FeatureFlagScope {
+  GLOBAL
+  ORGANIZATION
+  USER
+}
+
+enum UsageMetric {
+  AI_TOKENS
+  EMBEDDINGS
+  STORAGE_BYTES
+  API_CALLS
+  TOOL_EXECUTIONS
+  WORKFLOW_EXECUTIONS
+  NOTIFICATIONS
+}
+
+enum SecurityEventType {
+  LOGIN_SUCCEEDED
+  LOGIN_FAILED
+  AUTH_REQUIRED
+  PERMISSION_DENIED
+  APPROVAL_FAILED
+  TOOL_BLOCKED
+  RATE_LIMIT_EXCEEDED
+  CROSS_ORG_ATTEMPT
+}
+
+enum RateLimitScope {
+  USER
+  ORGANIZATION
+  API
+  AI
+  TOOL
+  WORKFLOW
+}
+
+enum SearchQuerySource {
+  FULL_TEXT
+  RETRIEVAL
+  HYBRID
+}
+
+/// Centralized feature flags with three scopes. Evaluation precedence is
+/// USER > ORGANIZATION > GLOBAL (see feature-flag.service). `scopeId` is null
+/// for GLOBAL, the organizationId for ORGANIZATION, the userId for USER.
+model FeatureFlag {
+  id          String           @id @default(cuid())
+  key         String
+  scope       FeatureFlagScope
+  scopeId     String?
+  enabled     Boolean          @default(false)
+  description String?
+  updatedById String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@unique([key, scope, scopeId])
+  @@index([key])
+  @@map("feature_flags")
+}
+
+/// Error grouping bucket — one row per unique fingerprint (route+message+
+/// status). `count`/`lastSeenAt` roll up occurrences; individual occurrences
+/// live in ErrorEvent. See error-reporting.service.
+model ErrorGroup {
+  id             String   @id @default(cuid())
+  fingerprint    String   @unique
+  title          String
+  message        String
+  level          String   @default("error")
+  count          Int      @default(0)
+  resolved       Boolean  @default(false)
+  lastRoute      String?
+  lastStatusCode Int?
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+
+  @@index([resolved, lastSeenAt])
+  @@map("error_groups")
+}
+
+/// A single captured error occurrence (request/user/org/stack/route/browser/
+/// timestamp), linked to its ErrorGroup by groupId.
+model ErrorEvent {
+  id             String   @id @default(cuid())
+  groupId        String
+  message        String
+  stack          String?
+  route          String?
+  method         String?
+  statusCode     Int?
+  requestId      String?
+  correlationId  String?
+  userId         String?
+  organizationId String?
+  url            String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  @@index([groupId, createdAt])
+  @@index([organizationId, createdAt])
+  @@map("error_events")
+}
+
+/// Usage metering event (billing-ready; no payment provider). Quantities are
+/// BigInt to hold token/byte counts. Read-model summaries also derive from
+/// existing operational tables — see metering.service.
+model UsageEvent {
+  id             String      @id @default(cuid())
+  organizationId String
+  metric         UsageMetric
+  quantity       BigInt      @default(0)
+  occurredAt     DateTime    @default(now())
+  metadata       Json?
+
+  @@index([organizationId, metric, occurredAt])
+  @@map("usage_events")
+}
+
+/// Security-relevant event for the Security Dashboard. Org/user nullable
+/// because some events (failed logins, cross-org probes) have no trusted
+/// org/user context. Populated centrally at the API error boundary + a few
+/// explicit hooks. See security.service.
+model SecurityEvent {
+  id             String            @id @default(cuid())
+  type           SecurityEventType
+  userId         String?
+  organizationId String?
+  ipAddress      String?
+  userAgent      String?
+  route          String?
+  metadata       Json?
+  createdAt      DateTime          @default(now())
+
+  @@index([type, createdAt])
+  @@index([organizationId, createdAt])
+  @@map("security_events")
+}
+
+/// Configurable rate-limit policy. `key` null = the default policy for that
+/// scope; a non-null key targets a specific org/user/route. Consumed by the
+/// expanded rate limiter. See rate-limit.service / docs/rate-limits.md.
+model RateLimitPolicy {
+  id            String         @id @default(cuid())
+  scope         RateLimitScope
+  key           String?
+  limit         Int
+  windowSeconds Int
+  enabled       Boolean        @default(true)
+  description   String?
+  updatedById   String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@unique([scope, key])
+  @@map("rate_limit_policies")
+}
+
+/// Search analytics log — records full-text and retrieval queries, result
+/// counts, zero-result flags, latency, and citation counts. No prior source
+/// existed; instrumented in search + retrieval services. See docs/analytics.md.
+model SearchQueryLog {
+  id             String            @id @default(cuid())
+  organizationId String
+  userId         String?
+  query          String
+  source         SearchQuerySource
+  resultCount    Int               @default(0)
+  zeroResults    Boolean           @default(false)
+  durationMs     Int?
+  citationCount  Int?
+  createdAt      DateTime          @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, zeroResults])
+  @@map("search_query_logs")
+}
+
+/// Centralized platform configuration (System Configuration area): AI
+/// provider/model defaults, retrieval defaults, storage limits, org defaults,
+/// etc. Generic key→JSON store, platform-admin managed. See system-config.service.
+model SystemConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       Json
+  description String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_config")
 }

@@ -1,7 +1,17 @@
 import { isAppError, ValidationError, type ApiResponse } from '@bond-os/shared';
-import { logger } from '@bond-os/shared/server';
+import {
+  getClientIp,
+  getRequestContext,
+  logger,
+  newRequestId,
+  runWithRequestContext,
+  type RequestContext,
+} from '@bond-os/shared/server';
 import { NextResponse } from 'next/server';
 import type { output, ZodError, ZodType } from 'zod';
+
+import { captureError } from '@/features/errors/services/error-reporting.service';
+import { recordSecurityEvent } from '@/features/security/services/security.service';
 
 const log = logger.child('api');
 
@@ -15,11 +25,28 @@ export function apiHandler<Context = { params: Promise<Record<string, string>> }
   handler: (request: Request, context: Context) => Promise<Response>,
 ) {
   return async (request: Request, context: Context): Promise<Response> => {
-    try {
-      return await handler(request, context);
-    } catch (error) {
-      return toErrorResponse(request, error);
-    }
+    // Phase 10: establish the request context (requestId / correlationId /
+    // route / method) so every downstream log line and captured error is
+    // correlated. userId / organizationId are filled in later by
+    // requireAuth / requireActiveOrganizationId.
+    const url = new URL(request.url);
+    const ctx: RequestContext = {
+      requestId: newRequestId(),
+      correlationId: request.headers.get('x-correlation-id') || newRequestId(),
+      route: url.pathname,
+      method: request.method,
+    };
+    return runWithRequestContext(ctx, async () => {
+      let response: Response;
+      try {
+        response = await handler(request, context);
+      } catch (error) {
+        response = await toErrorResponse(request, error);
+      }
+      response.headers.set('x-request-id', ctx.requestId);
+      response.headers.set('x-correlation-id', ctx.correlationId);
+      return response;
+    });
   };
 }
 
@@ -27,7 +54,7 @@ function isZodError(error: unknown): error is ZodError {
   return typeof error === 'object' && error !== null && (error as { name?: string }).name === 'ZodError';
 }
 
-function toErrorResponse(request: Request, error: unknown): NextResponse<ApiResponse<never>> {
+async function toErrorResponse(request: Request, error: unknown): Promise<NextResponse<ApiResponse<never>>> {
   if (isZodError(error)) {
     return NextResponse.json(
       {
@@ -41,6 +68,10 @@ function toErrorResponse(request: Request, error: unknown): NextResponse<ApiResp
   if (isAppError(error)) {
     if (error.statusCode >= 500) {
       log.error(error.message, { code: error.code, path: new URL(request.url).pathname });
+      await captureServerError(request, error, error.statusCode);
+    } else if (error.statusCode === 403) {
+      // Phase 10: permission denials feed the Security Dashboard.
+      await recordPermissionDenied(request);
     }
     return NextResponse.json(
       { success: false, error: { code: error.code, message: error.message, details: error.details } },
@@ -53,11 +84,44 @@ function toErrorResponse(request: Request, error: unknown): NextResponse<ApiResp
     message: error instanceof Error ? error.message : String(error),
     stack: error instanceof Error ? error.stack : undefined,
   });
+  await captureServerError(request, error, 500);
 
   return NextResponse.json(
     { success: false, error: { code: 'INTERNAL_ERROR', message: 'Something went wrong.' } },
     { status: 500 },
   );
+}
+
+/** Persist a server error into the grouped error store (failure-tolerant). */
+async function captureServerError(request: Request, error: unknown, statusCode: number): Promise<void> {
+  const ctx = getRequestContext();
+  await captureError({
+    source: 'server',
+    message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? (error.stack ?? null) : null,
+    route: ctx?.route ?? new URL(request.url).pathname,
+    method: ctx?.method ?? request.method,
+    statusCode,
+    requestId: ctx?.requestId ?? null,
+    correlationId: ctx?.correlationId ?? null,
+    userId: ctx?.userId ?? null,
+    organizationId: ctx?.organizationId ?? null,
+    url: request.url,
+    userAgent: request.headers.get('user-agent'),
+  });
+}
+
+/** Record a permission-denied security event (failure-tolerant). */
+async function recordPermissionDenied(request: Request): Promise<void> {
+  const ctx = getRequestContext();
+  await recordSecurityEvent({
+    type: 'PERMISSION_DENIED',
+    userId: ctx?.userId ?? null,
+    organizationId: ctx?.organizationId ?? null,
+    ipAddress: getClientIp(request),
+    userAgent: request.headers.get('user-agent'),
+    route: ctx?.route ?? new URL(request.url).pathname,
+  });
 }
 
 /** Shorthand for a successful `ApiResponse` JSON body. */

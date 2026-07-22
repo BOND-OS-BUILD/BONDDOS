@@ -2,6 +2,8 @@ import 'server-only';
 
 import pino from 'pino';
 
+import { getRequestContext } from './request-context';
+
 /**
  * Read directly from `process.env`, not the zod-validated `getEnv()` — same
  * reasoning as `LOG_LEVEL` below: `NODE_ENV` is always set contextually by
@@ -38,12 +40,29 @@ export interface Logger {
   child: (scope: string) => Logger;
 }
 
+/**
+ * Phase 10: automatically fold the active request context (requestId,
+ * correlationId, userId, organizationId) into every log line. Outside a
+ * request (jobs, build, module init) this is an empty object, so behaviour is
+ * unchanged there. Explicit `meta` always wins over context on key collision.
+ */
+function contextMeta(): Record<string, unknown> {
+  const ctx = getRequestContext();
+  if (!ctx) return {};
+  return {
+    requestId: ctx.requestId,
+    correlationId: ctx.correlationId,
+    ...(ctx.userId ? { userId: ctx.userId } : {}),
+    ...(ctx.organizationId ? { organizationId: ctx.organizationId } : {}),
+  };
+}
+
 function wrap(instance: pino.Logger): Logger {
   return {
-    info: (msg, meta) => instance.info(meta ?? {}, msg),
-    warn: (msg, meta) => instance.warn(meta ?? {}, msg),
-    error: (msg, meta) => instance.error(meta ?? {}, msg),
-    debug: (msg, meta) => instance.debug(meta ?? {}, msg),
+    info: (msg, meta) => instance.info({ ...contextMeta(), ...meta }, msg),
+    warn: (msg, meta) => instance.warn({ ...contextMeta(), ...meta }, msg),
+    error: (msg, meta) => instance.error({ ...contextMeta(), ...meta }, msg),
+    debug: (msg, meta) => instance.debug({ ...contextMeta(), ...meta }, msg),
     child: (scope: string) => wrap(instance.child({ scope })),
   };
 }
