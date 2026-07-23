@@ -9,6 +9,34 @@ this project means an annotated git tag at a milestone commit. See [`versioning.
 for what the tag scheme does and doesn't mean, and [`release-process.md`](./release-process.md) for
 how a tag actually gets cut.
 
+## [v1.2.0] — Phase 11: Extensibility Platform
+
+Tag: `v1.2.0`. Turns BOND OS into a platform organizations can extend without
+modifying core code. Every subsystem is **additive and reuse-first** — the
+public API and GraphQL reuse the dashboard repositories, custom objects reuse the
+Knowledge Graph, automations reuse the Workflow Engine, and webhooks/plugins ride
+one shared event catalog. The migration is additive-only (new tables use plain
+scalar FK columns; `EntityType` gains a `CUSTOM` value), so P0–P10 are unchanged.
+
+- `d0f5e1b` — Phase 11 schema (API keys, webhooks, custom objects, forms, plugins, templates)
+- `c861b89` — shared contracts (API scopes, event catalog, field types, schemas)
+- `8769d75` — database repositories
+- `a8066a3` — personal & organization API keys + public-API auth
+- `b2d86d8` — public REST API `/api/v1` + OpenAPI 3.1 + Swagger UI
+- `1d4f973` — typed event bus + outbound webhooks (signed, retried, replayable)
+- `c95b340` — custom objects + dynamic forms + developer portal
+- `4022369` — `@bond-os/sdk` (typed client, event router, webhook verification)
+- `7087643` — template marketplace + import/export (JSON + CSV)
+- `6e7ca61` — plugin system (lifecycle, isolation, permission validation)
+- `1991eeb` — optional read-only GraphQL endpoint
+- `8c52f15` — Phase 11 documentation (11 docs)
+
+Verified behind all four gates (`prisma validate` / `typecheck` / `lint` /
+`build`) with zero regressions; the additive migration was applied to the
+production database and recorded in `_prisma_migrations`. Deliberately **not**
+built (out of scope): payments/billing, mobile/desktop apps, autonomous AI,
+self-modifying code, or arbitrary code execution.
+
 ## [v1.0.0] — BOND OS Foundation Documentation Complete
 
 Tag: `v1.0.0` (pending — created at the end of the documentation batch described below).
