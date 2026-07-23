@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { BookOpen, Boxes, FileCode, KeyRound, Package, Puzzle, Webhook } from 'lucide-react';
+import { BookOpen, Boxes, FileCode, KeyRound, Package, Puzzle, Webhook, Workflow } from 'lucide-react';
 
 import { ROUTES } from '@bond-os/shared';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@bond-os/ui';
@@ -63,6 +63,13 @@ const CARDS = [
     icon: Package,
     title: 'Templates',
     description: 'Import and export workflows, prompts, dashboards, and more from the template marketplace.',
+  },
+  {
+    href: ROUTES.workflowBuilder,
+    external: false,
+    icon: Workflow,
+    title: 'Automation Builder',
+    description: 'Build visual automations on the Workflow Engine — triggered by the same events plugins hook into.',
   },
 ];
 

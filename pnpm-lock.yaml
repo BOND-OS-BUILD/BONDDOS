@@ -68,6 +68,9 @@ importers:
       dompurify:
         specifier: ^3.2.3
         version: 3.4.12
+      graphql:
+        specifier: ^16
+        version: 16.14.2
       katex:
         specifier: ^0.16.11
         version: 0.16.47
@@ -2876,6 +2879,10 @@ packages:
 
   gpt-tokenizer@2.9.0:
     resolution: {integrity: sha512-YSpexBL/k4bfliAzMrRqn3M6+it02LutVyhVpDeMKrC/O9+pCe/5s8U2hYKa2vFLD5/vHhsKc8sOn/qGqII8Kg==}
+
+  graphql@16.14.2:
+    resolution: {integrity: sha512-Chq1s4CY7jmh8gO2qvLIJyfCDIN+EHLFW/9iShnp1z8FjBQMoodWP1kDC36VAMXXIvAjj4ARa7ntfAV2BrjsbA==}
+    engines: {node: ^12.22.0 || ^14.16.0 || ^16.0.0 || >=17.0.0}
 
   hachure-fill@0.5.2:
     resolution: {integrity: sha512-3GKBOn+m2LX9iq+JC1064cSFprJY4jL1jCXTcpnfER5HYE2l/4EfWSGzkPa/ZDBmYI0ZOEj5VHV/eKnPGkHuOg==}
@@ -6994,6 +7001,8 @@ snapshots:
   gopd@1.2.0: {}
 
   gpt-tokenizer@2.9.0: {}
+
+  graphql@16.14.2: {}
 
   hachure-fill@0.5.2: {}
 
