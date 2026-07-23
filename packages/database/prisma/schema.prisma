@@ -150,6 +150,11 @@ enum EntityType {
   TASK
   PRODUCT
   EVENT
+  /// Phase 11 — an instance of an organization-defined custom object. The
+  /// concrete object type + field values live in `Entity.metadata`
+  /// (`customObjectKey`, `fields`), so custom objects reuse the Knowledge
+  /// Graph Entity system rather than adding a parallel store.
+  CUSTOM
 }
 
 enum ParseStatus {
@@ -2522,4 +2527,256 @@ model SystemConfig {
   updatedAt   DateTime @updatedAt
 
   @@map("system_config")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 11 — Extensibility Platform (plugins, SDK, public API, webhooks,
+// custom objects, forms, templates). Same additive discipline as Phase 10:
+// plain scalar FK columns (organizationId / userId as String), no `@relation`
+// back-references, so this migration touches zero existing tables/relations
+// and carries no P0–P10 regression risk. Tenant scoping is enforced in the
+// service layer. Custom-object *instances* reuse the `Entity` table
+// (entityType = CUSTOM); only the *definitions* are new here.
+// See docs/plugins.md, docs/public-api.md, docs/custom-objects.md.
+// ─────────────────────────────────────────────────────────────────────────
+
+enum ApiKeyType {
+  PERSONAL
+  ORGANIZATION
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
+  RETRYING
+}
+
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  EMAIL
+  PHONE
+  SELECT
+  MULTISELECT
+  CHECKBOX
+  DATE
+  RICH_TEXT
+  FILE
+}
+
+enum PluginStatus {
+  INSTALLED
+  ENABLED
+  DISABLED
+}
+
+enum TemplateType {
+  WORKFLOW
+  AI_PROMPT
+  PROJECT
+  DOCUMENT
+  KNOWLEDGE_GRAPH_VIEW
+  DASHBOARD
+}
+
+/// API key for the public REST API. `type=PERSONAL` keys carry a `userId`
+/// (act as that user); `type=ORGANIZATION` keys act as the org with a fixed
+/// scope set. Only the SHA-256 `hashedKey` is stored (never the plaintext);
+/// `prefix` is the short display fragment. `scopes` gates what the key can do.
+model ApiKey {
+  id             String     @id @default(cuid())
+  organizationId String
+  userId         String?
+  type           ApiKeyType
+  name           String
+  prefix         String
+  hashedKey      String     @unique
+  scopes         String[]
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  revokedAt      DateTime?
+  createdById    String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([organizationId])
+  @@index([userId])
+  @@map("api_keys")
+}
+
+/// An organization's subscription to outbound webhook events. `secret` signs
+/// deliveries (HMAC-SHA256). `events` is the list of subscribed event types
+/// (e.g. `project.created`). See docs/webhooks.md.
+model WebhookSubscription {
+  id             String   @id @default(cuid())
+  organizationId String
+  url            String
+  events         String[]
+  secret         String
+  description    String?
+  enabled        Boolean  @default(true)
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId])
+  @@map("webhook_subscriptions")
+}
+
+/// One delivery attempt-record for an outbound webhook (delivery log + retry
+/// state + replay source).
+model WebhookDelivery {
+  id             String                @id @default(cuid())
+  subscriptionId String
+  organizationId String
+  eventType      String
+  eventId        String?
+  payload        Json
+  status         WebhookDeliveryStatus  @default(PENDING)
+  attempts       Int                    @default(0)
+  responseStatus Int?
+  responseBody   String?
+  error          String?
+  nextRetryAt    DateTime?
+  deliveredAt    DateTime?
+  createdAt      DateTime               @default(now())
+
+  @@index([subscriptionId, createdAt])
+  @@index([status, nextRetryAt])
+  @@index([organizationId, createdAt])
+  @@map("webhook_deliveries")
+}
+
+/// Definition of an organization's custom object type (Supplier, Vendor,
+/// Contract, …). Instances are `Entity` rows (entityType = CUSTOM) tagged
+/// with this `key` in `Entity.metadata.customObjectKey`.
+model CustomObjectDefinition {
+  id             String   @id @default(cuid())
+  organizationId String
+  key            String
+  name           String
+  pluralName     String?
+  description    String?
+  icon           String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, key])
+  @@map("custom_object_definitions")
+}
+
+/// A field on a custom object definition (with type + validation config).
+model CustomFieldDefinition {
+  id                 String          @id @default(cuid())
+  organizationId     String
+  objectDefinitionId String
+  key                String
+  label              String
+  fieldType          CustomFieldType
+  required           Boolean         @default(false)
+  options            String[]
+  order              Int             @default(0)
+  config             Json?
+  createdAt          DateTime        @default(now())
+
+  @@unique([objectDefinitionId, key])
+  @@index([objectDefinitionId])
+  @@map("custom_field_definitions")
+}
+
+/// A named relationship type between two custom objects. Instances reuse the
+/// Knowledge Graph `Relationship`/`EntityRelationship` edges.
+model CustomRelationshipDefinition {
+  id              String   @id @default(cuid())
+  organizationId  String
+  key             String
+  label           String
+  sourceObjectKey String
+  targetObjectKey String
+  createdAt       DateTime @default(now())
+
+  @@unique([organizationId, key])
+  @@map("custom_relationship_definitions")
+}
+
+/// A dynamic form definition. `schema` is the ordered field list (type,
+/// label, validation rules). Optionally bound to a custom object via
+/// `customObjectKey`. See docs/forms.md.
+model FormDefinition {
+  id              String   @id @default(cuid())
+  organizationId  String
+  key             String
+  name            String
+  description     String?
+  schema          Json
+  customObjectKey String?
+  enabled         Boolean  @default(true)
+  createdById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([organizationId, key])
+  @@map("form_definitions")
+}
+
+/// A reusable template (workflow, AI prompt, project, document, KG view,
+/// dashboard). `organizationId` null = a built-in/global marketplace template.
+model Template {
+  id             String       @id @default(cuid())
+  organizationId String?
+  type           TemplateType
+  key            String
+  name           String
+  description    String?
+  content        Json
+  author         String?
+  version        String       @default("1.0.0")
+  isPublic       Boolean      @default(false)
+  createdById    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([type])
+  @@index([organizationId])
+  @@map("templates")
+}
+
+/// A plugin in the catalog. `manifest` holds the declared
+/// id/name/version/author/description/permissions/routes/components/services/
+/// hooks. Installation state is per-organization in `PluginInstallation`.
+model Plugin {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  version     String
+  author      String?
+  description String?
+  manifest    Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("plugins")
+}
+
+/// Per-organization plugin installation + lifecycle state (installed /
+/// enabled / disabled) + granted config. Isolation is enforced by scoping
+/// every plugin capability through this row's `organizationId`.
+model PluginInstallation {
+  id             String       @id @default(cuid())
+  organizationId String
+  pluginId       String
+  pluginKey      String
+  status         PluginStatus @default(INSTALLED)
+  version        String
+  config         Json?
+  grantedScopes  String[]
+  installedById  String?
+  installedAt    DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, pluginId])
+  @@index([organizationId])
+  @@map("plugin_installations")
 }
