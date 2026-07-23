@@ -60,3 +60,8 @@ export * from './repositories/error-reports';
 export * from './repositories/platform';
 export * from './repositories/search-query-logs';
 export * from './repositories/usage-events';
+// Phase 11 — extensibility repositories.
+export * from './repositories/api-keys';
+export * from './repositories/webhooks';
+export * from './repositories/custom-objects';
+export * from './repositories/forms';
