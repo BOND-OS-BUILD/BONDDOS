@@ -9,6 +9,8 @@ import {
 import { getEnv, logger } from '@bond-os/shared/server';
 
 import { notifyFromEvent } from '@/features/notifications/services/notification-fanout.service';
+import { emitLocal } from '@/features/events/lib/emitter';
+import { dispatchEventToWebhooks } from '@/features/webhooks/services/webhook-dispatch.service';
 
 import { createWorkflowDispatchBudget, consumeWorkflowStep, enterWorkflowDispatch, type WorkflowDispatchBudget } from '../lib/workflow-dispatch-budget';
 import { evaluateWorkflowCondition, type WorkflowConditionContext, type WorkflowConditionNode } from '../lib/workflow-condition';
@@ -122,6 +124,36 @@ export async function publishEvent(input: PublishEventInput, budget?: WorkflowDi
     await notifyFromEvent(event);
   } catch (error) {
     log.error('Notification fan-out failed for event', {
+      eventId: event.id,
+      organizationId: event.organizationId,
+      eventType: event.eventType,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // Phase 11 — extensibility fan-out. Both are additive and fully isolated:
+  // a webhook endpoint being slow/down, or a plugin's in-process handler
+  // throwing, must never affect the publisher, the notification fan-out, or
+  // workflow dispatch. These run for ALL events (including `workflow.*`
+  // completion events, which integrations legitimately care about).
+  emitLocal({
+    id: event.id,
+    type: event.eventType,
+    organizationId: event.organizationId,
+    occurredAt: event.createdAt.toISOString(),
+    payload: (event.payload as Record<string, unknown>) ?? {},
+  });
+
+  try {
+    await dispatchEventToWebhooks({
+      id: event.id,
+      organizationId: event.organizationId,
+      eventType: event.eventType,
+      payload: event.payload,
+      createdAt: event.createdAt,
+    });
+  } catch (error) {
+    log.error('Webhook dispatch failed for event', {
       eventId: event.id,
       organizationId: event.organizationId,
       eventType: event.eventType,
