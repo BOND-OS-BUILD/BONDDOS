@@ -11,6 +11,7 @@ import {
   listNotificationsForUser,
   listProjects,
   listTasks,
+  listWorkflowDefinitions,
   searchEntities,
   type CustomerDetail,
   type CustomerListItem,
@@ -151,6 +152,14 @@ export async function searchPublic(organizationId: string, q: string): Promise<P
 
 export function graphAnalyticsPublic(organizationId: string): Promise<GraphAnalytics> {
   return getGraphAnalytics(organizationId);
+}
+
+export function listWorkflowsPublic(organizationId: string, query: { page?: number; pageSize?: number }) {
+  return listWorkflowDefinitions({
+    organizationId,
+    page: query.page ?? 1,
+    pageSize: query.pageSize ?? 20,
+  });
 }
 
 const CATEGORY_TYPES: Record<NotificationCategory, NotificationType[]> = {
