@@ -65,3 +65,4 @@ export * from './repositories/api-keys';
 export * from './repositories/webhooks';
 export * from './repositories/custom-objects';
 export * from './repositories/forms';
+export * from './repositories/templates';

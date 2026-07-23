@@ -31,6 +31,7 @@ export * from './spaces';
 export * from './sync-job';
 export * from './tag';
 export * from './task';
+export * from './templates';
 export * from './user';
 export * from './webhooks';
 export * from './website';
