@@ -66,3 +66,4 @@ export * from './repositories/webhooks';
 export * from './repositories/custom-objects';
 export * from './repositories/forms';
 export * from './repositories/templates';
+export * from './repositories/plugins';

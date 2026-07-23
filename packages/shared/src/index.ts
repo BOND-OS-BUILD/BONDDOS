@@ -9,6 +9,7 @@ export * from './constants';
 export * from './custom-fields';
 export * from './errors';
 export * from './events';
+export * from './plugins';
 export * from './feature-flags';
 export * from './schemas';
 export * from './types';
