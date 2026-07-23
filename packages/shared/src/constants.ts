@@ -66,6 +66,11 @@ export const ROUTES = {
   teamDashboard: '/team-dashboard',
   sharedConversations: '/bond/shared',
   analytics: '/analytics',
+  developer: '/developer',
+  developerObjects: '/developer/objects',
+  developerForms: '/developer/forms',
+  developerPlugins: '/developer/plugins',
+  developerTemplates: '/developer/templates',
   admin: '/admin',
   settings: '/settings',
   settingsProfile: '/settings/profile',
@@ -73,6 +78,7 @@ export const ROUTES = {
   settingsMembers: '/settings/members',
   settingsBilling: '/settings/billing',
   settingsApiKeys: '/settings/api-keys',
+  settingsWebhooks: '/settings/webhooks',
   settingsPreferences: '/settings/preferences',
 } as const;
 
