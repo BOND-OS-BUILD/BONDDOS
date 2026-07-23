@@ -9,6 +9,7 @@ import {
   Brain,
   Building2,
   Cable,
+  Code2,
   Contact,
   FileText,
   FolderKanban,
@@ -72,6 +73,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: ROUTES.people, label: 'People', icon: Users },
   { href: ROUTES.integrations, label: 'Integrations', icon: Plug },
   { href: ROUTES.analytics, label: 'Analytics', icon: BarChart3 },
+  { href: ROUTES.developer, label: 'Developer', icon: Code2 },
   { href: ROUTES.settings, label: 'Settings', icon: Settings },
 ];
 
@@ -85,6 +87,7 @@ function isNavItemActive(pathname: string, href: string): boolean {
     href === ROUTES.agents ||
     href === ROUTES.workflows ||
     href === ROUTES.spaces ||
+    href === ROUTES.developer ||
     href === ROUTES.admin
   ) {
     return pathname.startsWith(href);

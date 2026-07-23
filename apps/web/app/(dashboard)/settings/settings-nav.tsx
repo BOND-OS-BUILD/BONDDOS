@@ -17,6 +17,7 @@ const NAV_ITEMS: SettingsNavItem[] = [
   { href: ROUTES.settingsMembers, label: 'Members' },
   { href: ROUTES.settingsBilling, label: 'Billing' },
   { href: ROUTES.settingsApiKeys, label: 'API Keys' },
+  { href: ROUTES.settingsWebhooks, label: 'Webhooks' },
   { href: ROUTES.settingsPreferences, label: 'Preferences' },
 ];
 

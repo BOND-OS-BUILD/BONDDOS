@@ -10,6 +10,7 @@ import {
   ListTodo,
   Mail,
   Package,
+  Shapes,
   StickyNote,
   Tag,
   User,
@@ -48,6 +49,7 @@ export const NODE_STYLES: Record<GraphNodeType, NodeStyle> = {
   EVENT: { label: 'Event', icon: Calendar, color: '#ef4444' },
   FOLDER: { label: 'Folder', icon: Folder, color: '#78716c' },
   TAG: { label: 'Tag', icon: Tag, color: '#84cc16' },
+  CUSTOM: { label: 'Custom', icon: Shapes, color: '#7c3aed' },
 };
 
 export function getNodeStyle(type: string): NodeStyle {
